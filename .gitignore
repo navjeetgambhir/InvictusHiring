@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment — never commit secrets
+backend/.env
+*.env
+
+# Uploaded candidate CVs (PII)
+backend/cv_uploads/
+
+# Generated job-board files (regenerated on publish)
+backend/indeed_feeds/
+backend/job_pages/
+
+# Logs
+backend/logs/
+logs/
+
+# Frontend build output
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp

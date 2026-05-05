@@ -1,0 +1,14 @@
+.env
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.venv
+venv
+cv_uploads/*
+logs/*
+indeed_feeds/*
+job_pages/*
+tests/
+*.egg-info
+.DS_Store

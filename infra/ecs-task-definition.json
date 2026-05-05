@@ -1,0 +1,82 @@
+{
+  "family": "invictus-hiring",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn":      "arn:aws:iam::ACCOUNT_ID:role/invictusTaskRole",
+
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/invictus-backend:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 8000, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "PYTHONUNBUFFERED", "value": "1" },
+        { "name": "APP_BASE_URL",     "value": "https://YOUR_DOMAIN" }
+      ],
+      "secrets": [
+        { "name": "OPENAI_API_KEY",    "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/openai_api_key" },
+        { "name": "DATABASE_URL",      "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/database_url" },
+        { "name": "ENCRYPTION_KEY",    "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/encryption_key" },
+        { "name": "JWT_SECRET_KEY",    "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/jwt_secret_key" }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "cv-uploads",
+          "containerPath": "/app/backend/cv_uploads",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group":         "/ecs/invictus-backend",
+          "awslogs-region":        "REGION",
+          "awslogs-stream-prefix": "backend"
+        }
+      },
+      "healthCheck": {
+        "command":     ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"],
+        "interval":    30,
+        "timeout":     5,
+        "retries":     3,
+        "startPeriod": 15
+      }
+    },
+    {
+      "name": "frontend",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/invictus-frontend:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 80, "protocol": "tcp" }
+      ],
+      "dependsOn": [
+        { "containerName": "backend", "condition": "HEALTHY" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group":         "/ecs/invictus-frontend",
+          "awslogs-region":        "REGION",
+          "awslogs-stream-prefix": "frontend"
+        }
+      }
+    }
+  ],
+
+  "volumes": [
+    {
+      "name": "cv-uploads",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-XXXXXXXXX",
+        "rootDirectory": "/cv_uploads",
+        "transitEncryption": "ENABLED"
+      }
+    }
+  ]
+}

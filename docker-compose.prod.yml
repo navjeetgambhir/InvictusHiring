@@ -1,0 +1,61 @@
+version: "3.9"
+
+# Local production smoke-test — mirrors the ECS layout.
+# Do NOT use this for dev (use docker-compose.yml instead).
+#
+# Usage:
+#   cp backend/.env.example backend/.env   # fill in real keys
+#   docker compose -f docker-compose.prod.yml up --build
+
+services:
+
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: hiring_user
+      POSTGRES_PASSWORD: hiring_pass
+      POSTGRES_DB: hiring_db
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d  # runs *.sql on first boot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hiring_user -d hiring_db"]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://hiring_user:hiring_pass@db:5432/hiring_db?ssl=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - cv_uploads:/app/backend/cv_uploads
+      - logs:/app/backend/logs
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    restart: unless-stopped
+
+volumes:
+  pgdata_prod:
+  cv_uploads:
+  logs:

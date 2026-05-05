@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "invictus-hiring": {
+      "command": "/Users/navjeetkaur/Desktop/Capstone/.venv/bin/python",
+      "args": ["/Users/navjeetkaur/Desktop/Capstone/backend/hiring_mcp/server.py"],
+      "env": {
+        "PYTHONPATH": "/Users/navjeetkaur/Desktop/Capstone/backend"
+      }
+    }
+  }
+}
