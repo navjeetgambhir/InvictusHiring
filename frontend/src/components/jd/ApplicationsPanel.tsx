@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Users, Download, ChevronDown, ChevronUp, Loader2, AlertCircle, Star } from 'lucide-react'
+import { PanelWrapper } from './PanelWrapper'
 import { getToken } from '@/api/auth'
 import { fetchApplications, toggleShortlist, cvDownloadUrl, type CandidateApplicationRecord, type ScreeningRecommendation } from '@/api/candidates'
 import { downloadBlob } from '@/lib/download'
 
 interface Props {
   sessionId: string
+  onShortlistChange?: () => void
 }
 
 const RECOMMENDATION_META: Record<ScreeningRecommendation, { label: string; color: string }> = {
@@ -125,7 +127,15 @@ function ApplicationRow({ app, sessionId, token, onShortlistToggled }: {
 
           {app.cover_letter && (
             <div>
-              <p className="text-xs font-semibold text-stone-500 mb-1">Cover Letter</p>
+              <div className="flex items-center gap-2 mb-1">
+                <p className="text-xs font-semibold text-stone-500">Cover Letter</p>
+                {app.cover_letter_filename && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] text-violet-700 border border-violet-200">
+                    <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor"><path d="M4 0h5.5L13 3.5V14a2 2 0 01-2 2H4a2 2 0 01-2-2V2a2 2 0 012-2zm0 1a1 1 0 00-1 1v12a1 1 0 001 1h7a1 1 0 001-1V4h-2.5A1.5 1.5 0 018 2.5V1H4zm5 .5V2.5a.5.5 0 00.5.5H12L9 1.5z"/></svg>
+                    {app.cover_letter_filename}
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-stone-700 whitespace-pre-wrap leading-relaxed">{app.cover_letter}</p>
             </div>
           )}
@@ -169,7 +179,7 @@ function ApplicationRow({ app, sessionId, token, onShortlistToggled }: {
   )
 }
 
-export function ApplicationsPanel({ sessionId }: Props) {
+export function ApplicationsPanel({ sessionId, onShortlistChange }: Props) {
   const [apps, setApps] = useState<CandidateApplicationRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -178,71 +188,74 @@ export function ApplicationsPanel({ sessionId }: Props) {
   useEffect(() => {
     if (!token) return
 
-    let interval: ReturnType<typeof setInterval> | null = null
+    let cancelled = false
+
+    async function refresh() {
+      try {
+        const updated = await fetchApplications(sessionId, token)
+        if (!cancelled) {
+          setApps(prev => {
+            const changed = updated.length !== prev.length || updated.some(u => {
+              const p = prev.find(p => p.id === u.id)
+              return !p
+                || p.screening_status !== u.screening_status
+                || p.screening_score !== u.screening_score
+                || p.shortlisted !== u.shortlisted
+                || p.interview_status !== u.interview_status
+            })
+            return changed ? updated : prev
+          })
+        }
+      } catch { /* ignore polling errors */ }
+    }
 
     fetchApplications(sessionId, token)
       .then((initial) => {
-        setApps(initial)
-        setLoading(false)
-
-        if (!initial.some(a => a.screening_status === 'pending')) return
-
-        interval = setInterval(async () => {
-          try {
-            const updated = await fetchApplications(sessionId, token)
-            setApps(prev => {
-              const changed = updated.length !== prev.length || updated.some(u => {
-                const p = prev.find(p => p.id === u.id)
-                return !p || p.screening_status !== u.screening_status || p.screening_score !== u.screening_score
-              })
-              return changed ? updated : prev
-            })
-            if (!updated.some(a => a.screening_status === 'pending')) clearInterval(interval!)
-          } catch { /* ignore polling errors */ }
-        }, 10_000)
+        if (!cancelled) { setApps(initial); setLoading(false) }
       })
       .catch((e) => {
-        setError(e.message)
-        setLoading(false)
+        if (!cancelled) { setError(e.message); setLoading(false) }
       })
 
-    return () => { if (interval) clearInterval(interval) }
+    // Always poll — catches new applications and screening completions
+    const interval = setInterval(refresh, 5_000)
+    return () => { cancelled = true; clearInterval(interval) }
   }, [sessionId, token])
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-violet-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2">
-        <Users className="h-4 w-4 text-violet-500" />
-        <span className="text-sm font-semibold text-stone-800">Applications</span>
-        {!loading && <span className="ml-auto text-xs text-stone-400">{apps.length} received</span>}
+    <PanelWrapper
+      icon={<Users className="h-4 w-4 text-violet-500" />}
+      title="Applications"
+      meta={!loading ? `${apps.length} received` : undefined}
+      borderColor="border-violet-200"
+      headerBg="bg-white"
+      headerHover="hover:bg-violet-50"
+    >
+      <div className="flex flex-col gap-2">
+        {loading && (
+          <div className="flex items-center gap-2 text-xs text-stone-400 py-2">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
+          </div>
+        )}
+        {error && <p className="text-xs text-red-500">{error}</p>}
+
+        {!loading && !error && apps.length === 0 && (
+          <p className="text-xs text-stone-400 py-2">No applications yet. Share the job board link with candidates.</p>
+        )}
+
+        {apps.length > 0 && apps.map(app => (
+          <ApplicationRow
+            key={app.id}
+            app={app}
+            sessionId={sessionId}
+            token={token}
+            onShortlistToggled={(id, shortlisted) => {
+              setApps(prev => prev.map(a => a.id === id ? { ...a, shortlisted } : a))
+              onShortlistChange?.()
+            }}
+          />
+        ))}
       </div>
-
-      {loading && (
-        <div className="flex items-center gap-2 text-xs text-stone-400 py-2">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
-        </div>
-      )}
-      {error && <p className="text-xs text-red-500">{error}</p>}
-
-      {!loading && !error && apps.length === 0 && (
-        <p className="text-xs text-stone-400 py-2">No applications yet. Share the job board link with candidates.</p>
-      )}
-
-      {apps.length > 0 && (
-        <div className="flex flex-col gap-2">
-          {apps.map(app => (
-            <ApplicationRow
-              key={app.id}
-              app={app}
-              sessionId={sessionId}
-              token={token}
-              onShortlistToggled={(id, shortlisted) =>
-                setApps(prev => prev.map(a => a.id === id ? { ...a, shortlisted } : a))
-              }
-            />
-          ))}
-        </div>
-      )}
-    </div>
+    </PanelWrapper>
   )
 }

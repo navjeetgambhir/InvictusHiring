@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, MapPin, DollarSign, Building2, Briefcase, CheckCircle2, Paperclip, X } from 'lucide-react'
+import { ArrowLeft, MapPin, DollarSign, Building2, Briefcase, CheckCircle2, Paperclip, X, FileText, Clock, Users, AlertCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -75,6 +75,18 @@ export function JobDetailPage() {
                       <DollarSign className="h-3.5 w-3.5" />{job.salary_band}
                     </span>
                   )}
+                  {job.expires_at && (
+                    <span className="flex items-center gap-1 text-amber-600">
+                      <Clock className="h-3.5 w-3.5" />
+                      Closes {new Date(job.expires_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    </span>
+                  )}
+                  {job.max_applications != null && (
+                    <span className={`flex items-center gap-1 ${job.max_applications - job.application_count <= 5 ? 'text-red-500' : 'text-stone-500'}`}>
+                      <Users className="h-3.5 w-3.5" />
+                      {Math.max(0, job.max_applications - job.application_count)} spot{job.max_applications - job.application_count !== 1 ? 's' : ''} left
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -128,10 +140,23 @@ export function JobDetailPage() {
           )}
         </div>
 
-        {/* Right: Apply form */}
+        {/* Right: Apply form or closed notice */}
         <div className="lg:col-span-1">
           <div className="sticky top-6">
-            <ApplyForm sessionId={sessionId!} jobTitle={job.title} />
+            {job.is_accepting
+              ? <ApplyForm sessionId={sessionId!} jobTitle={job.title} />
+              : (
+                <div className="rounded-xl border border-stone-200 bg-stone-50 p-6 text-center shadow-sm">
+                  <AlertCircle className="h-8 w-8 text-stone-400 mx-auto mb-3" />
+                  <h3 className="font-semibold text-stone-700 mb-1">Applications Closed</h3>
+                  <p className="text-sm text-stone-500">
+                    {job.expires_at && new Date(job.expires_at) <= new Date()
+                      ? 'This job posting has expired.'
+                      : 'This job has reached its maximum number of applications.'}
+                  </p>
+                </div>
+              )
+            }
           </div>
         </div>
       </div>
@@ -143,12 +168,18 @@ function ApplyForm({ sessionId, jobTitle }: { sessionId: string; jobTitle: strin
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
+  const [clMode, setClMode] = useState<'type' | 'upload'>('type')
   const [coverLetter, setCoverLetter] = useState('')
+  const [clFile, setClFile] = useState<File | null>(null)
   const [cvFile, setCvFile] = useState<File | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
+  const cvRef = useRef<HTMLInputElement>(null)
+  const clRef = useRef<HTMLInputElement>(null)
+
+  // keep fileRef alias for the existing CV input
+  const fileRef = cvRef
 
   async function handleSubmit(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -159,7 +190,8 @@ function ApplyForm({ sessionId, jobTitle }: { sessionId: string; jobTitle: strin
         name: name.trim(),
         email: email.trim(),
         phone: phone.trim() || undefined,
-        cover_letter: coverLetter.trim() || undefined,
+        cover_letter: clMode === 'type' ? coverLetter.trim() || undefined : undefined,
+        cover_letter_file: clMode === 'upload' ? clFile ?? undefined : undefined,
         cv: cvFile ?? undefined,
       })
       setSubmitted(true)
@@ -259,14 +291,69 @@ function ApplyForm({ sessionId, jobTitle }: { sessionId: string; jobTitle: strin
           />
         </div>
 
+        {/* Cover letter — type or upload */}
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="cover-letter">Cover Letter <span className="text-stone-400 text-xs font-normal">(optional)</span></Label>
-          <Textarea
-            id="cover-letter"
-            placeholder="Tell us why you're a great fit…"
-            value={coverLetter}
-            onChange={(e) => setCoverLetter(e.target.value)}
-            rows={4}
+          <div className="flex items-center justify-between">
+            <Label>Cover Letter <span className="text-stone-400 text-xs font-normal">(optional)</span></Label>
+            <div className="flex rounded-md overflow-hidden border border-stone-200 text-xs">
+              <button
+                type="button"
+                onClick={() => { setClMode('type'); setClFile(null); if (clRef.current) clRef.current.value = '' }}
+                className={`px-2.5 py-1 transition-colors ${clMode === 'type' ? 'bg-violet-600 text-white' : 'bg-white text-stone-500 hover:bg-stone-50'}`}
+              >
+                Write
+              </button>
+              <button
+                type="button"
+                onClick={() => { setClMode('upload'); setCoverLetter('') }}
+                className={`px-2.5 py-1 transition-colors border-l border-stone-200 ${clMode === 'upload' ? 'bg-violet-600 text-white' : 'bg-white text-stone-500 hover:bg-stone-50'}`}
+              >
+                Upload
+              </button>
+            </div>
+          </div>
+
+          {clMode === 'type' ? (
+            <Textarea
+              id="cover-letter"
+              placeholder="Tell us why you're a great fit…"
+              value={coverLetter}
+              onChange={(e) => setCoverLetter(e.target.value)}
+              rows={4}
+            />
+          ) : clFile ? (
+            <div className="flex items-center justify-between rounded-lg border border-violet-200 bg-violet-50 px-3 py-2">
+              <div className="flex items-center gap-2 text-sm text-violet-800 truncate">
+                <FileText className="h-4 w-4 shrink-0" />
+                <span className="truncate">{clFile.name}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setClFile(null); if (clRef.current) clRef.current.value = '' }}
+                className="ml-2 shrink-0 text-violet-600 hover:text-red-500 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => clRef.current?.click()}
+              className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-violet-300 bg-violet-50/50 px-4 py-3 text-sm text-stone-500 hover:border-violet-500 hover:bg-violet-50 hover:text-violet-700 transition-colors"
+            >
+              <FileText className="h-4 w-4" />
+              Upload cover letter (PDF, DOCX, TXT)
+            </button>
+          )}
+          <input
+            ref={clRef}
+            type="file"
+            accept=".pdf,.docx,.doc,.txt"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) setClFile(file)
+            }}
           />
         </div>
 

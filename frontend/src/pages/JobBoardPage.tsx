@@ -1,34 +1,51 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Briefcase, MapPin, DollarSign, Building2, Search, ArrowRight } from 'lucide-react'
+import { Briefcase, MapPin, DollarSign, Building2, Search, ArrowRight, Clock, Users, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { fetchJobs, type JobListing } from '@/api/candidates'
 
+const PAGE_SIZE = 10
+
 export function JobBoardPage() {
   const [jobs, setJobs] = useState<JobListing[]>([])
+  const [total, setTotal] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const navigate = useNavigate()
 
   useEffect(() => {
-    fetchJobs()
-      .then(setJobs)
+    setLoading(true)
+    setError(null)
+    fetchJobs(page, PAGE_SIZE)
+      .then((data) => {
+        setJobs(data.jobs)
+        setTotal(data.total)
+        setTotalPages(data.total_pages)
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [])
+  }, [page])
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase()
-    if (!q) return jobs
-    return jobs.filter(
-      (j) =>
-        j.title.toLowerCase().includes(q) ||
-        j.department.toLowerCase().includes(q) ||
-        j.location.toLowerCase().includes(q),
-    )
-  }, [jobs, search])
+  // Reset to page 1 when search changes
+  useEffect(() => {
+    setPage(1)
+  }, [search])
+
+  const filtered = search
+    ? jobs.filter((j) => {
+        const q = search.toLowerCase()
+        return (
+          j.title.toLowerCase().includes(q) ||
+          j.department.toLowerCase().includes(q) ||
+          j.location.toLowerCase().includes(q)
+        )
+      })
+    : jobs
 
   return (
     <div className="min-h-screen bg-violet-50">
@@ -67,11 +84,64 @@ export function JobBoardPage() {
             {search ? 'No roles match your search.' : 'No open positions right now. Check back soon.'}
           </div>
         )}
+
         <div className="flex flex-col gap-4">
           {filtered.map((job) => (
             <JobCard key={job.session_id} job={job} onClick={() => navigate(`/jobs/${job.session_id}`)} />
           ))}
         </div>
+
+        {!loading && !error && totalPages > 1 && (
+          <div className="flex items-center justify-between mt-8 pt-6 border-t border-violet-100">
+            <p className="text-sm text-stone-400">
+              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total} role{total !== 1 ? 's' : ''}
+            </p>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="h-8 w-8 p-0"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                .reduce<(number | '…')[]>((acc, p, idx, arr) => {
+                  if (idx > 0 && p - (arr[idx - 1] as number) > 1) acc.push('…')
+                  acc.push(p)
+                  return acc
+                }, [])
+                .map((p, idx) =>
+                  p === '…' ? (
+                    <span key={`ellipsis-${idx}`} className="px-1 text-stone-400 text-sm">…</span>
+                  ) : (
+                    <Button
+                      key={p}
+                      variant={p === page ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setPage(p as number)}
+                      className="h-8 w-8 p-0 text-xs"
+                    >
+                      {p}
+                    </Button>
+                  )
+                )}
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="h-8 w-8 p-0"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )
@@ -81,6 +151,14 @@ function JobCard({ job, onClick }: { job: JobListing; onClick: () => void }) {
   const postedDate = new Date(job.posted_at).toLocaleDateString('en-GB', {
     day: 'numeric', month: 'short', year: 'numeric',
   })
+
+  const expiryLabel = job.expires_at
+    ? new Date(job.expires_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    : null
+
+  const spotsLeft = job.max_applications != null
+    ? Math.max(0, job.max_applications - job.application_count)
+    : null
 
   return (
     <button
@@ -131,6 +209,18 @@ function JobCard({ job, onClick }: { job: JobListing; onClick: () => void }) {
 
         <div className="flex flex-col items-end gap-2 shrink-0">
           <span className="text-xs text-stone-400">{postedDate}</span>
+          {expiryLabel && (
+            <span className="flex items-center gap-1 text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+              <Clock className="h-3 w-3" />
+              Closes {expiryLabel}
+            </span>
+          )}
+          {spotsLeft !== null && (
+            <span className={`flex items-center gap-1 text-[11px] rounded-full px-2 py-0.5 border ${spotsLeft <= 5 ? 'text-red-600 bg-red-50 border-red-200' : 'text-stone-500 bg-stone-50 border-stone-200'}`}>
+              <Users className="h-3 w-3" />
+              {spotsLeft} spot{spotsLeft !== 1 ? 's' : ''} left
+            </span>
+          )}
           <ArrowRight className="h-4 w-4 text-stone-300 group-hover:text-violet-500 group-hover:translate-x-0.5 transition-all" />
         </div>
       </div>

@@ -15,6 +15,7 @@ export interface SessionState {
   session_id: string
   status: 'drafting' | 'pending_approval' | 'approved' | 'rejected' | 'published'
   title: string
+  department: string
   submitted_by: string
   latest_draft: string | null
   draft_version: number
@@ -32,6 +33,51 @@ function authHeaders(): Record<string, string> {
     : { 'Content-Type': 'application/json' }
 }
 
+const SENTINEL = '__SESSION_ID__'
+const SENTINEL_LEN = SENTINEL.length + 36  // "__SESSION_ID__" + UUID
+
+/**
+ * Read a streaming draft response, extract the __SESSION_ID__ sentinel that
+ * arrives at the very end, and forward only visible content to onChunk.
+ * Buffers the tail of the stream so a sentinel split across two raw TCP chunks
+ * never appears in the displayed message.
+ */
+async function readDraftStream(
+  body: ReadableStream<Uint8Array>,
+  onChunk: (chunk: string) => void,
+): Promise<string> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  let sessionId = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    pending += decoder.decode(value, { stream: true })
+
+    const sentinelIdx = pending.indexOf(SENTINEL)
+    if (sentinelIdx !== -1) {
+      // Sentinel arrived — flush everything before it, extract ID
+      const before = pending.slice(0, sentinelIdx)
+      if (before) onChunk(before)
+      const match = pending.slice(sentinelIdx).match(/__SESSION_ID__([a-f0-9-]{36})/)
+      if (match) sessionId = match[1]
+      pending = ''
+    } else {
+      // Safe to flush everything except the last SENTINEL_LEN chars
+      // which might be a partial sentinel split across chunks
+      if (pending.length > SENTINEL_LEN) {
+        onChunk(pending.slice(0, -SENTINEL_LEN))
+        pending = pending.slice(-SENTINEL_LEN)
+      }
+    }
+  }
+  // Flush any remainder (should be empty after sentinel extraction)
+  if (pending && !pending.includes(SENTINEL)) onChunk(pending)
+  return sessionId
+}
+
 /** POST free-text requirements → streams JD text chunks; resolves with the session_id */
 export async function submitFreetextDraft(
   submitted_by: string,
@@ -45,25 +91,7 @@ export async function submitFreetextDraft(
     body: JSON.stringify({ submitted_by, role, text }),
   })
   if (!res.ok) throw new Error(`Draft failed: ${res.statusText}`)
-
-  const reader = res.body!.getReader()
-  const decoder = new TextDecoder()
-  let sessionId = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    const text = decoder.decode(value, { stream: true })
-    const sessionMatch = text.match(/__SESSION_ID__([a-f0-9-]{36})/)
-    if (sessionMatch) {
-      sessionId = sessionMatch[1]
-      const before = text.replace(/__SESSION_ID__[a-f0-9-]{36}/, '')
-      if (before) onChunk(before)
-    } else {
-      onChunk(text)
-    }
-  }
-  return sessionId
+  return readDraftStream(res.body!, onChunk)
 }
 
 /** POST requirements → streams JD text chunks; resolves with the session_id */
@@ -77,27 +105,7 @@ export async function submitDraft(
     body: JSON.stringify(requirements),
   })
   if (!res.ok) throw new Error(`Draft failed: ${res.statusText}`)
-
-  const reader = res.body!.getReader()
-  const decoder = new TextDecoder()
-  let sessionId = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    const text = decoder.decode(value, { stream: true })
-
-    const sessionMatch = text.match(/__SESSION_ID__([a-f0-9-]{36})/)
-    if (sessionMatch) {
-      sessionId = sessionMatch[1]
-      const before = text.replace(/__SESSION_ID__[a-f0-9-]{36}/, '')
-      if (before) onChunk(before)
-    } else {
-      onChunk(text)
-    }
-  }
-
-  return sessionId
+  return readDraftStream(res.body!, onChunk)
 }
 
 /** POST a chat message → streams reply chunks */
@@ -154,6 +162,16 @@ export async function rejectDraft(
   }
 }
 
+/** Revert a published/approved JD back to pending_approval for re-editing */
+export async function revertToPendingApproval(sessionId: string): Promise<void> {
+  const res = await fetch(`${BASE}/revert`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ session_id: sessionId }),
+  })
+  if (!res.ok) throw new Error(`Revert failed: ${res.statusText}`)
+}
+
 export interface SessionSummary {
   session_id: string
   title: string
@@ -187,14 +205,21 @@ export type PostingEvent =
   | { type: 'error';  platform: string; message: string }
   | { type: 'done' }
 
+export interface PublishOptions {
+  expires_at?: string | null    // ISO8601 datetime string, or null for no expiry
+  max_applications?: number | null
+}
+
 /** POST to /api/jobs/post/:sessionId — streams NDJSON posting events */
 export async function publishJD(
   sessionId: string,
-  onEvent: (event: PostingEvent) => void
+  onEvent: (event: PostingEvent) => void,
+  options?: PublishOptions,
 ): Promise<void> {
   const res = await fetch(`/api/jobs/post/${sessionId}`, {
     method: 'POST',
-    headers: authHeaders(),
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(options ?? {}),
   })
   if (!res.ok) throw new Error(`Publish failed: ${res.statusText}`)
 

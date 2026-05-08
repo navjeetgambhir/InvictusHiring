@@ -53,9 +53,10 @@ def verify_password(plain: str, hashed: str) -> bool:
 _ALGORITHM = "HS256"
 
 
-def create_access_token(email: str, name: str, role: str) -> str:
-    """Return a signed JWT valid for settings.jwt_expire_minutes."""
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
+def create_access_token(email: str, name: str, role: str, expires_minutes: int | None = None) -> str:
+    """Return a signed JWT. Defaults to settings.jwt_expire_minutes."""
+    minutes = expires_minutes if expires_minutes is not None else settings.jwt_expire_minutes
+    expire = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     payload = {"sub": email, "name": name, "role": role, "exp": expire}
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=_ALGORITHM)
 

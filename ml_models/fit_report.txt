@@ -1,0 +1,19 @@
+Model: fit
+Estimator: GradientBoostingClassifier
+n_estimators=200  max_depth=3  learning_rate=0.05  subsample=0.8
+
+Feature importances (descending):
+  recommendation_rank            0.401315
+  gap_ratio                      0.311106
+  screening_score                0.103685
+  nice_skill_count               0.060843
+  skill_overlap                  0.050619
+  nice_skill_overlap             0.032858
+  cover_letter_words             0.016702
+  was_shortlisted                0.015353
+  required_skill_count           0.001921
+  location_signal                0.001912
+  has_phone                      0.001446
+  seniority_tier                 0.001305
+  has_cv                         0.000866
+  reached_interview              0.000068

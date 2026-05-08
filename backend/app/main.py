@@ -6,10 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from app.core.database import engine, Base, get_db
+from app.core.redis import close_redis
 from app.core.logging import setup_logging
 from app.core.security import encrypt_email, hash_email, hash_password
 from app.db.models import User
-from app.api.routes import jd, auth, jobs, agent_cards, candidates, analytics, interviews
+from app.api.routes import jd, auth, jobs, agent_cards, candidates, analytics, interviews, ml, telemetry
 
 setup_logging()
 
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
     logger.info("Database ready")
     await _seed_demo_users()
     yield
+    await close_redis()
     logger.info("Shutting down")
 
 
@@ -79,6 +81,8 @@ app.include_router(jobs.router, prefix="/api")
 app.include_router(candidates.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
 app.include_router(interviews.router, prefix="/api")
+app.include_router(ml.router, prefix="/api")
+app.include_router(telemetry.router, prefix="/api")
 app.include_router(agent_cards.router)  # served at root — no /api prefix
 
 

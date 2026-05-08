@@ -21,10 +21,14 @@ class RouteRequest(BaseModel):
     pipeline_state: str = "idle"
     has_draft: bool = False
     history: list[dict] = []
+    session_id: str | None = None
+    job_title: str | None = None
+    job_department: str | None = None
 
 
 class QueryRequest(BaseModel):
     question: str
+    session_id: str | None = None
 
 
 @router.post("/classify")
@@ -51,6 +55,8 @@ async def route(
         pipeline_state=body.pipeline_state,
         history=body.history or [],
         has_draft=body.has_draft,
+        job_title=body.job_title,
+        job_department=body.job_department,
     )
     return {
         "intent": decision.intent,
@@ -69,6 +75,6 @@ async def analytics_query(
 ):
     """NLP→SQL agent — streams NDJSON: sql | chunk | done | error."""
     return StreamingResponse(
-        agent4_query(body.question, db),
+        agent4_query(body.question, db, session_id=body.session_id),
         media_type="application/x-ndjson",
     )

@@ -1,0 +1,8 @@
+define bot refuse discriminatory output
+  "I need to revise this draft — it may contain language that could violate UK equality legislation or employment law. Please try again or provide more details about the role."
+
+define flow self check output
+  $allowed = execute self_check_output
+  if not $allowed
+    bot refuse discriminatory output
+    stop

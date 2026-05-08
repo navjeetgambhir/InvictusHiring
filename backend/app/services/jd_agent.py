@@ -5,13 +5,15 @@ from typing import AsyncIterator
 
 from loguru import logger
 from openai import AsyncOpenAI
+from langsmith import traceable
+from langsmith.wrappers import wrap_openai
 
 from app.core.config import settings
 from app.services.rag import retrieve_similar_jds
 from app.services.agent_telemetry import fire_run
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_client = AsyncOpenAI(api_key=settings.openai_api_key)
+_client = wrap_openai(AsyncOpenAI(api_key=settings.openai_api_key))
 
 JD_PROMPT_VERSION = "jd-v1"
 
@@ -85,6 +87,7 @@ _EXTRACT_TOOL = {
 }
 
 
+@traceable(name="jd_drafter.extract_requirements", run_type="chain", tags=["agent1", "jd_drafter"])
 async def extract_requirements(text: str, session_id: str | None = None) -> dict:
     """Use OpenAI function calling to extract structured fields from free-text requirements."""
     logger.info(f"Extracting requirements from free text ({len(text)} chars)")
@@ -149,6 +152,7 @@ Company Description:{requirements.get('company_description', '')}
 Draft the full JD now."""
 
 
+@traceable(name="jd_drafter.initial_draft", run_type="chain", tags=["agent1", "jd_drafter"])
 async def stream_initial_draft(requirements: dict, db: AsyncSession, session_id: str | None = None) -> AsyncIterator[str]:
     """Stream the first JD draft using RAG context from past JDs."""
     logger.info(f"Drafting JD | title='{requirements.get('title')}' location='{requirements.get('location')}'")
@@ -208,11 +212,13 @@ async def stream_initial_draft(requirements: dict, db: AsyncSession, session_id:
         ))
 
 
+@traceable(name="jd_drafter.revision", run_type="chain", tags=["agent1", "jd_drafter"])
 async def stream_revision(
     feedback: str,
     current_draft: str,
     history: list[dict],
     session_id: str | None = None,
+    draft_version: int = 2,
 ) -> AsyncIterator[str]:
     """Stream a revised JD draft given rejection feedback and chat history."""
     logger.info(f"Revising JD | feedback='{feedback[:80]}…' history_len={len(history)}")
@@ -266,11 +272,12 @@ async def stream_revision(
             session_id=session_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            metrics={"feedback_chars": len(feedback), "output_chars": output_chars, "history_turns": len(history)},
+            metrics={"feedback_chars": len(feedback), "output_chars": output_chars, "history_turns": len(history), "draft_version": draft_version},
             error_message=error_message,
         ))
 
 
+@traceable(name="jd_drafter.chat_reply", run_type="chain", tags=["agent1", "jd_drafter"])
 async def stream_chat_reply(
     user_message: str,
     current_draft: str,

@@ -10,6 +10,10 @@ export interface JobListing {
   nice_to_have_skills: string[]
   company_description: string
   posted_at: string
+  expires_at: string | null
+  max_applications: number | null
+  application_count: number
+  is_accepting: boolean
   content: string | null
 }
 
@@ -18,6 +22,7 @@ export interface ApplicationPayload {
   email: string
   phone?: string
   cover_letter?: string
+  cover_letter_file?: File
   cv?: File
 }
 
@@ -32,6 +37,7 @@ export interface CandidateApplicationRecord {
   email: string
   phone: string | null
   cover_letter: string | null
+  cover_letter_filename: string | null
   cv_filename: string | null
   has_cv: boolean
   screening_status: 'pending' | 'screened' | 'failed'
@@ -95,8 +101,16 @@ export interface SchedulePayload {
   duration_minutes?: number
 }
 
-export async function fetchJobs(): Promise<JobListing[]> {
-  const res = await fetch(`${API}/candidates/jobs`)
+export interface JobsPage {
+  jobs: JobListing[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export async function fetchJobs(page = 1, pageSize = 10): Promise<JobsPage> {
+  const res = await fetch(`${API}/candidates/jobs?page=${page}&page_size=${pageSize}`)
   if (!res.ok) throw new Error('Failed to load jobs')
   return res.json()
 }
@@ -113,6 +127,7 @@ export async function submitApplication(sessionId: string, payload: ApplicationP
   form.append('email', payload.email)
   form.append('phone', payload.phone ?? '')
   form.append('cover_letter', payload.cover_letter ?? '')
+  if (payload.cover_letter_file) form.append('cover_letter_file', payload.cover_letter_file)
   if (payload.cv) form.append('cv', payload.cv)
 
   const res = await fetch(`${API}/candidates/apply/${sessionId}`, {

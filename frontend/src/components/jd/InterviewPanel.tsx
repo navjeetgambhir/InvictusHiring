@@ -3,6 +3,7 @@ import {
   Calendar, ChevronDown, ChevronUp, Download, Loader2,
   Mail, MessageSquare, Sparkles, CheckCircle2,
 } from 'lucide-react'
+import { PanelWrapper } from './PanelWrapper'
 import { getToken } from '@/api/auth'
 import {
   fetchSessionInterviews,
@@ -18,6 +19,7 @@ import { downloadBlob } from '@/lib/download'
 
 interface Props {
   sessionId: string
+  refreshTrigger?: number
 }
 
 const FORMAT_LABELS: Record<InterviewFormat, string> = {
@@ -57,11 +59,13 @@ function EmailApprovalForm({
   invitation,
   candidateEmail,
   token,
+  scheduled,
   onApproved,
 }: {
   invitation: InterviewInvitation
   candidateEmail: string
   token: string
+  scheduled: boolean
   onApproved: (updated: InterviewInvitation) => void
 }) {
   const alreadySent = !!invitation.email_approved_at
@@ -151,11 +155,18 @@ function EmailApprovalForm({
         />
       </div>
 
+      {!scheduled && (
+        <div className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          <Calendar className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <p className="text-xs text-amber-700">Schedule the interview date &amp; time below before sending the invite.</p>
+        </div>
+      )}
+
       {error && <p className="text-xs text-red-500">{error}</p>}
 
       <button
         onClick={handleApprove}
-        disabled={sending || !recipient || !subject || !body}
+        disabled={sending || !recipient || !subject || !body || !scheduled}
         className="flex items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50 transition-colors"
       >
         {sending
@@ -316,6 +327,21 @@ function InterviewRow({ record, token, onUpdated }: {
       interview_format: result.interview_format,
       interview_location: result.interview_location,
     })
+
+    // Replace [DATE/TIME] and [FORMAT] placeholders in the invitation body
+    if (invitation && !invitation.email_approved_at) {
+      const formattedDate = new Date(result.interview_scheduled_at).toLocaleString('en-GB', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      })
+      const formatLabel = FORMAT_LABELS[result.interview_format]
+      setInvitation(prev => prev ? {
+        ...prev,
+        email_body: prev.email_body
+          .replace(/\[DATE\/TIME\]/gi, formattedDate)
+          .replace(/\[FORMAT\]/gi, formatLabel),
+      } : prev)
+    }
   }
 
   return (
@@ -375,9 +401,11 @@ function InterviewRow({ record, token, onUpdated }: {
           {invitation && (
             <>
               <EmailApprovalForm
+                key={record.interview_scheduled_at ?? 'unscheduled'}
                 invitation={invitation}
                 candidateEmail={record.email}
                 token={token}
+                scheduled={scheduled}
                 onApproved={updated => setInvitation(updated)}
               />
               <div className="rounded-lg border border-stone-200 bg-white p-3 flex flex-col gap-2">
@@ -429,7 +457,7 @@ function InterviewRow({ record, token, onUpdated }: {
   )
 }
 
-export function InterviewPanel({ sessionId }: Props) {
+export function InterviewPanel({ sessionId, refreshTrigger }: Props) {
   const [records, setRecords] = useState<InterviewRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -437,10 +465,34 @@ export function InterviewPanel({ sessionId }: Props) {
 
   useEffect(() => {
     if (!token) return
+
+    let cancelled = false
+
+    async function refresh() {
+      try {
+        const data = await fetchSessionInterviews(sessionId, token)
+        if (!cancelled) {
+          setRecords(prev => {
+            const changed = data.length !== prev.length || data.some(d => {
+              const p = prev.find(p => p.id === d.id)
+              return !p
+                || p.interview_status !== d.interview_status
+                || p.interview_scheduled_at !== d.interview_scheduled_at
+                || !!d.invitation !== !!p.invitation
+            })
+            return changed ? data : prev
+          })
+        }
+      } catch { /* ignore polling errors */ }
+    }
+
     fetchSessionInterviews(sessionId, token)
-      .then(data => { setRecords(data); setLoading(false) })
-      .catch(e => { setError(e.message); setLoading(false) })
-  }, [sessionId, token])
+      .then(data => { if (!cancelled) { setRecords(data); setLoading(false) } })
+      .catch(e => { if (!cancelled) { setError(e.message); setLoading(false) } })
+
+    const interval = setInterval(refresh, 5_000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [sessionId, token, refreshTrigger])
 
   function handleUpdated(updated: Partial<InterviewRecord> & { id: string }) {
     setRecords(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r))
@@ -448,38 +500,37 @@ export function InterviewPanel({ sessionId }: Props) {
 
   const scheduledCount = records.filter(r => r.interview_status === 'scheduled').length
 
+  const metaText = !loading
+    ? `${records.length} shortlisted${scheduledCount > 0 ? ` · ${scheduledCount} scheduled` : ''}`
+    : undefined
+
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2">
-        <Calendar className="h-4 w-4 text-amber-500" />
-        <span className="text-sm font-semibold text-stone-800">Interview Scheduling</span>
-        {!loading && (
-          <span className="ml-auto text-xs text-stone-400">
-            {records.length} shortlisted{scheduledCount > 0 ? ` · ${scheduledCount} scheduled` : ''}
-          </span>
+    <PanelWrapper
+      icon={<Calendar className="h-4 w-4 text-amber-500" />}
+      title="Interview Scheduling"
+      meta={metaText}
+      borderColor="border-amber-200"
+      headerBg="bg-white"
+      headerHover="hover:bg-amber-50"
+    >
+      <div className="flex flex-col gap-2">
+        {loading && (
+          <div className="flex items-center gap-2 text-xs text-stone-400 py-2">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
+          </div>
         )}
+        {error && <p className="text-xs text-red-500">{error}</p>}
+
+        {!loading && !error && records.length === 0 && (
+          <p className="text-xs text-stone-400 py-2">
+            No shortlisted candidates yet. Star candidates in the Applications panel to shortlist them.
+          </p>
+        )}
+
+        {records.length > 0 && records.map(r => (
+          <InterviewRow key={r.id} record={r} token={token} onUpdated={handleUpdated} />
+        ))}
       </div>
-
-      {loading && (
-        <div className="flex items-center gap-2 text-xs text-stone-400 py-2">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
-        </div>
-      )}
-      {error && <p className="text-xs text-red-500">{error}</p>}
-
-      {!loading && !error && records.length === 0 && (
-        <p className="text-xs text-stone-400 py-2">
-          No shortlisted candidates yet. Star candidates in the Applications panel to shortlist them.
-        </p>
-      )}
-
-      {records.length > 0 && (
-        <div className="flex flex-col gap-2">
-          {records.map(r => (
-            <InterviewRow key={r.id} record={r} token={token} onUpdated={handleUpdated} />
-          ))}
-        </div>
-      )}
-    </div>
+    </PanelWrapper>
   )
 }

@@ -5,8 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, CurrentUser
+from app.core.redis import get_active_session, set_active_session, clear_active_session
 from app.core.security import decrypt_email, hash_email, verify_password, create_access_token
 from app.db.models import User
+from app.services.email_sender import send_password_reset_email
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -61,10 +63,17 @@ async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Dep
     user = result.scalar_one_or_none()
 
     if user:
-        # Production: generate a signed reset token and email it.
-        # For now, log the intent so it's visible in server logs.
         from loguru import logger
-        logger.info(f"Password reset requested for user id={user.id}")
+        from app.core.security import create_access_token
+        # Reuse JWT as a short-lived reset token (30 min expiry)
+        reset_token = create_access_token(
+            email=request.email, name="", role="reset", expires_minutes=30
+        )
+        try:
+            await send_password_reset_email(to=request.email, reset_token=reset_token)
+        except Exception as exc:
+            logger.error(f"Failed to send password reset email to {request.email}: {exc}")
+        logger.info(f"Password reset email dispatched for user id={user.id}")
 
     # Always return the same response to prevent email enumeration
     return {"message": "If that email is registered, a reset link has been sent."}
@@ -74,3 +83,31 @@ async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Dep
 async def me(user: CurrentUser = Depends(get_current_user)):
     """Returns the authenticated user's profile. Useful for token validation on page load."""
     return {"email": user.email, "name": user.name, "role": user.role}
+
+
+class ActiveSessionIn(BaseModel):
+    session_id: str
+
+
+@router.put("/active-session")
+async def save_active_session(
+    body: ActiveSessionIn,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Persist the user's last active JD session in Redis (30-day TTL)."""
+    await set_active_session(user.email, body.session_id)
+    return {"ok": True}
+
+
+@router.get("/active-session")
+async def load_active_session(user: CurrentUser = Depends(get_current_user)):
+    """Return the user's last active session_id, or null if none stored."""
+    session_id = await get_active_session(user.email)
+    return {"session_id": session_id}
+
+
+@router.delete("/active-session")
+async def delete_active_session(user: CurrentUser = Depends(get_current_user)):
+    """Clear the stored active session (called on logout or New JD)."""
+    await clear_active_session(user.email)
+    return {"ok": True}

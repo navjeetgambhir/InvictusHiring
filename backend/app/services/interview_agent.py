@@ -110,6 +110,13 @@ Generate a personalised interview invitation for {first_name}. Leave [DATE/TIME]
         email_subject = raw.get("email_subject", f"Interview Invitation — {job.title if job else 'Role'}")
         email_body = raw.get("email_body", "")
         interview_questions = raw.get("interview_questions", [])
+
+        # If the interview is already scheduled, replace placeholders immediately
+        if app.interview_scheduled_at:
+            _FORMAT_LABELS = {"phone": "Phone Call", "video": "Video Call", "in_person": "In Person"}
+            formatted_dt = app.interview_scheduled_at.strftime("%-d %B %Y at %H:%M")
+            format_label = _FORMAT_LABELS.get(app.interview_format or "", app.interview_format or "TBD")
+            email_body = email_body.replace("[DATE/TIME]", formatted_dt).replace("[FORMAT]", format_label)
         if response.usage:
             input_tokens = response.usage.prompt_tokens
             output_tokens = response.usage.completion_tokens

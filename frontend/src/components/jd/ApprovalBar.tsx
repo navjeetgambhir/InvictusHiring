@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ThumbsUp, ThumbsDown, CheckCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { PanelWrapper } from './PanelWrapper'
 import type { SessionStatus } from '@/hooks/useJDSession'
 
 interface Props {
@@ -26,7 +27,13 @@ export function ApprovalBar({ status, onApprove, onReject }: Props) {
   if (status !== 'pending_approval') return null
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-violet-200 bg-white p-4 shadow-sm">
+    <PanelWrapper
+      icon={<CheckCircle className="h-4 w-4 text-violet-400" />}
+      title="Review Draft"
+      borderColor="border-violet-200"
+      headerBg="bg-white"
+      headerHover="hover:bg-violet-50"
+    >
       {!showFeedback ? (
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm text-stone-600">Review the draft above and take action</p>
@@ -66,6 +73,6 @@ export function ApprovalBar({ status, onApprove, onReject }: Props) {
           </div>
         </div>
       )}
-    </div>
+    </PanelWrapper>
   )
 }

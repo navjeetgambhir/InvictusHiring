@@ -74,14 +74,95 @@ psql postgresql://hiring_user:PASSWORD@RDS_ENDPOINT:5432/hiring_db \
 psql postgresql://hiring_user:PASSWORD@RDS_ENDPOINT:5432/hiring_db \
   -f backend/migrations/002_candidate_cv_screening.sql
 psql postgresql://hiring_user:PASSWORD@RDS_ENDPOINT:5432/hiring_db \
-  -f backend/migrations/003_prompt_versions.sql
+  -f backend/migrations/003_interview_scheduling.sql
 psql postgresql://hiring_user:PASSWORD@RDS_ENDPOINT:5432/hiring_db \
   -f backend/migrations/004_agent_runs.sql
+psql postgresql://hiring_user:PASSWORD@RDS_ENDPOINT:5432/hiring_db \
+  -f backend/migrations/005_ml_outcome_fields.sql
+psql postgresql://hiring_user:PASSWORD@RDS_ENDPOINT:5432/hiring_db \
+  -f backend/migrations/006_cover_letter_file.sql
+psql postgresql://hiring_user:PASSWORD@RDS_ENDPOINT:5432/hiring_db \
+  -f backend/migrations/007_job_expiry.sql
 ```
 
 ---
 
-## 3. Secrets Manager
+## 3. ElastiCache (Redis)
+
+Used for chat history caching and active session persistence. The app fails silently if Redis is unavailable (falls back to Postgres), but ElastiCache is strongly recommended for production.
+
+```bash
+# Create a subnet group (use the same subnets as your Fargate tasks)
+aws elasticache create-cache-subnet-group \
+  --cache-subnet-group-name invictus-redis-subnet \
+  --cache-subnet-group-description "Invictus Redis subnets" \
+  --subnet-ids subnet-XXXXXXXX subnet-YYYYYYYY \
+  --region $REGION
+
+# Create a single-node Redis cluster (t4g.micro is sufficient)
+aws elasticache create-cache-cluster \
+  --cache-cluster-id invictus-redis \
+  --cache-node-type cache.t4g.micro \
+  --engine redis \
+  --engine-version 7.0 \
+  --num-cache-nodes 1 \
+  --cache-subnet-group-name invictus-redis-subnet \
+  --security-group-ids sg-XXXXXXXXX \
+  --region $REGION
+
+# Wait for it to be available (~3 min)
+aws elasticache wait cache-cluster-available --cache-cluster-id invictus-redis --region $REGION
+
+# Get the endpoint
+aws elasticache describe-cache-clusters \
+  --cache-cluster-id invictus-redis \
+  --show-cache-node-info \
+  --query "CacheClusters[0].CacheNodes[0].Endpoint.Address" --output text
+```
+
+Set the Redis URL as a secret (see step 4):
+```
+REDIS_URL=redis://ELASTICACHE_ENDPOINT:6379/0
+```
+
+---
+
+## 4. Amazon SES (SMTP)
+
+Replaces Mailhog for sending interview invitations and application confirmations.
+
+```bash
+# Verify your sending domain (replace with your actual domain)
+aws ses verify-domain-identity --domain invictushiring.co --region $REGION
+
+# Follow the DNS TXT record instructions returned above, then check verification:
+aws ses get-domain-dkim-attributes --domains invictushiring.co --region $REGION
+
+# Create an IAM user for SMTP credentials
+aws iam create-user --user-name invictus-ses-smtp
+
+aws iam attach-user-policy --user-name invictus-ses-smtp \
+  --policy-arn arn:aws:iam::aws:policy/AmazonSESFullAccess
+
+# Generate SMTP credentials (convert IAM access key → SES SMTP password)
+aws iam create-access-key --user-name invictus-ses-smtp
+# Note the AccessKeyId and SecretAccessKey — convert to SES SMTP credentials:
+# https://docs.aws.amazon.com/ses/latest/dg/smtp-credentials.html
+```
+
+Store SMTP settings as secrets (see step 5):
+```
+SMTP_HOST=email-smtp.eu-west-2.amazonaws.com
+SMTP_PORT=587
+SMTP_USER=<SES SMTP username (converted from IAM AccessKeyId)>
+SMTP_PASSWORD=<SES SMTP password (converted from IAM SecretAccessKey)>
+SMTP_FROM=noreply@invictushiring.co
+SMTP_USE_TLS=true
+```
+
+---
+
+## 5. Secrets Manager
 
 Store all sensitive env vars — the ECS task reads these at runtime.
 
@@ -93,16 +174,25 @@ aws secretsmanager create-secret --name invictus/database_url \
   --secret-string "postgresql+asyncpg://hiring_user:PASSWORD@RDS_ENDPOINT:5432/hiring_db?ssl=require" \
   --region $REGION
 
+aws secretsmanager create-secret --name invictus/redis_url \
+  --secret-string "redis://ELASTICACHE_ENDPOINT:6379/0"  --region $REGION
+
 aws secretsmanager create-secret --name invictus/encryption_key \
   --secret-string "YOUR_FERNET_KEY"  --region $REGION
 
 aws secretsmanager create-secret --name invictus/jwt_secret_key \
   --secret-string "YOUR_JWT_SECRET"  --region $REGION
+
+aws secretsmanager create-secret --name invictus/smtp_user \
+  --secret-string "YOUR_SES_SMTP_USER"  --region $REGION
+
+aws secretsmanager create-secret --name invictus/smtp_password \
+  --secret-string "YOUR_SES_SMTP_PASSWORD"  --region $REGION
 ```
 
 ---
 
-## 4. EFS (for CV uploads)
+## 6. EFS (for CV uploads)
 
 ```bash
 EFS_ID=$(aws efs create-file-system \
@@ -121,7 +211,7 @@ aws efs create-mount-target \
 
 ---
 
-## 5. IAM Roles
+## 7. IAM Roles
 
 ### ECS Task Execution Role (pull images, read secrets)
 ```bash
@@ -147,7 +237,7 @@ aws iam attach-role-policy --role-name invictusTaskRole \
 
 ---
 
-## 6. CloudWatch Log Groups
+## 8. CloudWatch Log Groups
 
 ```bash
 aws logs create-log-group --log-group-name /ecs/invictus-backend  --region $REGION
@@ -156,7 +246,7 @@ aws logs create-log-group --log-group-name /ecs/invictus-frontend --region $REGI
 
 ---
 
-## 7. ECS Cluster + Service
+## 9. ECS Cluster + Service
 
 ```bash
 # Cluster
@@ -185,7 +275,7 @@ aws ecs create-service \
 
 ---
 
-## 8. Update ecs-task-definition.json placeholders
+## 10. Update ecs-task-definition.json placeholders
 
 Open `infra/ecs-task-definition.json` and replace:
 
@@ -193,7 +283,7 @@ Open `infra/ecs-task-definition.json` and replace:
 |---|---|
 | `ACCOUNT_ID` | Your AWS account ID (12 digits) |
 | `REGION` | e.g. `eu-west-2` |
-| `fs-XXXXXXXXX` | Your EFS file system ID from step 4 |
+| `fs-XXXXXXXXX` | Your EFS file system ID from step 6 |
 | `YOUR_DOMAIN` | Your ALB DNS name or custom domain |
 
 ---

@@ -7,7 +7,7 @@ import { login, storeUser, type User } from '@/api/auth'
 
 function InvictusLogo({ size = 36, className = '' }: { size?: number; className?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="frontend/public/tie-box-by-podvoodoo13-brandcrowd.png" className={className}>
       {/* Outer ring */}
       <circle cx="24" cy="24" r="22" stroke="white" strokeWidth="2" strokeOpacity="0.4" />
       {/* Person silhouette — head */}
@@ -261,7 +261,7 @@ export function LoginPage({ onLogin }: Props) {
               </form>
 
               {/* Demo credentials */}
-              <div className="rounded-xl bg-white/80 border border- -200 p-4 space-y-2">
+              {/*<div className="rounded-xl bg-white/80 border border- -200 p-4 space-y-2">
                 <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider">Demo accounts</p>
                 <div className="space-y-2">
                   {[
@@ -280,7 +280,7 @@ export function LoginPage({ onLogin }: Props) {
                   ))}
                 </div>
                 <p className="text-[10px] text-stone-400">Click an account to auto-fill · password: <span className="font-mono">password</span></p>
-              </div>
+              </div>*/}
             </div>
           )}
         </div>

@@ -59,3 +59,36 @@ export function clearUser(): void {
   localStorage.removeItem(USER_KEY)
   localStorage.removeItem(TOKEN_KEY)
 }
+
+function authHeaders(): Record<string, string> {
+  const token = getToken()
+  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) h['Authorization'] = `Bearer ${token}`
+  return h
+}
+
+export async function saveActiveSession(sessionId: string): Promise<void> {
+  await fetch(`${BASE}/active-session`, {
+    method: 'PUT',
+    headers: authHeaders(),
+    body: JSON.stringify({ session_id: sessionId }),
+  }).catch(() => {})
+}
+
+export async function loadActiveSession(): Promise<string | null> {
+  try {
+    const res = await fetch(`${BASE}/active-session`, { headers: authHeaders() })
+    if (!res.ok) return null
+    const data = await res.json()
+    return data.session_id ?? null
+  } catch {
+    return null
+  }
+}
+
+export async function clearActiveSession(): Promise<void> {
+  await fetch(`${BASE}/active-session`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  }).catch(() => {})
+}

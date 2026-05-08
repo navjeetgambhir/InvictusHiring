@@ -1,0 +1,20 @@
+Model: join
+Estimator: GradientBoostingClassifier
+n_estimators=200  max_depth=3  learning_rate=0.05  subsample=0.8
+
+Feature importances (descending):
+  gap_ratio                      0.273716
+  skill_overlap                  0.230815
+  days_to_offer                  0.101320
+  recommendation_rank            0.098420
+  cover_letter_words             0.073597
+  days_to_respond                0.072003
+  screening_score                0.044319
+  location_signal                0.035677
+  interview_rounds               0.027443
+  seniority_tier                 0.026099
+  required_skill_count           0.011460
+  interview_format_phone         0.002381
+  interview_format_inperson      0.001293
+  has_cv                         0.000773
+  interview_format_video         0.000682

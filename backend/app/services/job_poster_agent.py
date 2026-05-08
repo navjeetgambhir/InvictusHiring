@@ -18,13 +18,15 @@ from typing import AsyncGenerator
 
 from loguru import logger
 from openai import AsyncOpenAI
+from langsmith import traceable
+from langsmith.wrappers import wrap_openai
 
 from app.core.config import settings
 from app.services.platforms.linkedin import post_to_linkedin
 from app.services.platforms.indeed import post_to_indeed
 from app.services.platforms.google_jobs import post_to_google_jobs
 
-_client = AsyncOpenAI(api_key=settings.openai_api_key)
+_client = wrap_openai(AsyncOpenAI(api_key=settings.openai_api_key))
 
 POSTER_PROMPT_VERSION = "poster-v1"
 
@@ -111,6 +113,7 @@ async def _publish(
     raise ValueError(f"Unknown platform: {platform_id}")
 
 
+@traceable(name="job_poster.stream_postings", run_type="chain", tags=["agent2", "job_poster"])
 async def stream_job_postings(
     jd_content: str,
     title: str,

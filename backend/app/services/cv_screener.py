@@ -8,6 +8,8 @@ from pathlib import Path
 
 from loguru import logger
 from openai import AsyncOpenAI
+from langsmith import traceable
+from langsmith.wrappers import wrap_openai
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +20,7 @@ from app.services.agent_telemetry import fire_run
 CV_DIR = Path(__file__).parent.parent.parent / "cv_uploads"
 CV_DIR.mkdir(exist_ok=True)
 
-_client = AsyncOpenAI(api_key=settings.openai_api_key)
+_client = wrap_openai(AsyncOpenAI(api_key=settings.openai_api_key))
 
 SCREEN_PROMPT_VERSION = "screen-v1"
 
@@ -63,6 +65,7 @@ def _extract_sync(filename: str, data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+@traceable(name="cv_screener.screen_cv", run_type="chain", tags=["agent3", "cv_screener"])
 async def screen_cv(
     cv_text: str,
     job_title: str,
@@ -89,6 +92,7 @@ async def screen_cv(
     return json.loads(response.choices[0].message.content or "{}")
 
 
+@traceable(name="cv_screener.run_screening", run_type="chain", tags=["agent3", "cv_screener"])
 async def run_screening(application_id: uuid.UUID, db: AsyncSession) -> None:
     """Load application + job context, run AI screening, persist results."""
     result = await db.execute(

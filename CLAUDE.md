@@ -1,109 +1,19 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Hard Rules
+
+- **Never read `backend/.env` or `backend/app/core/config.py`** — these files contain secrets. If config values are needed, ask the user directly.
+
 # Invictus Hiring — Capstone Project
 
 AI-powered hiring automation platform with human-in-the-loop for JD drafting, candidate shortlisting, and interview coordination.
 
-## Project Structure
-
-```
-Capstone/
-├── backend/                  # FastAPI Python backend
-│   ├── app/
-│   │   ├── main.py           # App entry point, CORS, HTTP logging, demo user seeding on startup
-│   │   ├── core/
-│   │   │   ├── config.py     # Pydantic settings (reads from backend/.env)
-│   │   │   ├── database.py   # Async SQLAlchemy engine + session factory
-│   │   │   ├── logging.py    # Loguru setup + stdlib → loguru intercept bridge
-│   │   │   ├── security.py   # Fernet email encryption, SHA-256 blind index, bcrypt passwords, HS256 JWT
-│   │   │   └── dependencies.py  # get_current_user / require_role FastAPI dependencies
-│   │   ├── db/
-│   │   │   ├── models.py     # User, PastJD, JDRequest, JDDraft, ChatMessage, JobPosting, CandidateApplication
-│   │   │   └── queries.py    # Shared DB helpers: get_request_or_404, latest_draft
-│   │   ├── services/
-│   │   │   ├── supervisor.py        # Supervisor orchestration layer — RoutingDecision dataclass,
-│   │   │   │                        #   supervisor_route() uses gpt-4o-mini to classify 7 intents
-│   │   │   │                        #   (jd_draft, jd_chat, jd_revise, approve, publish, analytics, other)
-│   │   │   │                        #   with pipeline_state + history context; falls back on low confidence
-│   │   │   ├── jd_agent.py          # OpenAI streaming: extract_requirements, draft, revise, chat
-│   │   │   ├── rag.py               # pgvector cosine similarity retrieval + OpenAI embeddings;
-│   │   │   │                        #   logs retrieval scores per result (title + similarity)
-│   │   │   ├── job_poster_agent.py  # Agent 2 — reformat JD per platform + stream NDJSON progress
-│   │   │   ├── cv_screener.py       # CV text extraction (PDF/DOCX) + OpenAI candidate screening agent
-│   │   │   └── platforms/
-│   │   │       ├── linkedin.py      # LinkedIn UGC Posts API (ugcPosts endpoint)
-│   │   │       ├── indeed.py        # Indeed XML feed generation + optional re-index ping
-│   │   │       └── google_jobs.py   # schema.org JSON-LD page + Google Indexing API notify
-│   │   └── api/routes/
-│   │       ├── jd.py          # All JD drafter API endpoints; GET /api/jd/sessions with last_message_preview
-│   │       ├── auth.py        # POST /api/auth/login, GET /api/auth/me, POST /api/auth/forgot-password
-│   │       ├── analytics.py   # NLP-to-SQL analytics agent; POST /analytics/route for supervisor routing
-│   │       ├── jobs.py        # POST /api/jobs/post/{id}, GET /api/jobs/postings/{id}, XML/HTML feeds
-│   │       ├── candidates.py  # Public job board + apply endpoints; HR applications + CV download
-│   │       └── agent_cards.py # A2A-compliant agent cards at /.well-known/*
-│   ├── hiring_mcp/
-│   │   ├── server.py   # FastMCP stdio server — DB, LinkedIn, Indeed, Google Jobs tools
-│   │   └── client.py
-│   ├── cv_uploads/           # Uploaded candidate CVs (UUID-named, served only to authenticated HR)
-│   ├── tests/                # pytest test suite (37 tests, no real DB/OpenAI)
-│   ├── migrations/
-│   │   ├── 001_init.sql      # CREATE EXTENSION vector (run once)
-│   │   └── 002_candidate_cv_screening.sql  # CV + screening columns on candidate_applications
-│   ├── indeed_feeds/         # Generated Indeed XML files (served at /indeed-feed/{id}.xml)
-│   ├── job_pages/            # Generated Google Jobs HTML pages (served at /jobs/{id})
-│   ├── logs/                 # Loguru output (hiring.log, JSON, daily rotation)
-│   └── .env                  # Local secrets — never commit
-├── frontend/                 # React + Vite + TypeScript + shadcn/ui
-│   └── src/
-│       ├── App.tsx           # Root — JWT token validation on mount (GET /api/auth/me),
-│       │                     #   view state: 'dashboard' | 'jd-chat', breadcrumb nav in header
-│       ├── api/
-│       │   ├── jd.ts         # Fetch wrappers for all JD endpoints (streaming-aware);
-│       │   │                 #   fetchSessions() → SessionSummary[] with last_message_preview
-│       │   ├── auth.ts       # login(), getStoredUser(), getToken(), clearUser()
-│       │   ├── analytics.ts  # routeMessage() → RoutingDecision; calls POST /analytics/route
-│       │   ├── agents.ts     # fetchAgentCard() — A2A agent card discovery
-│       │   └── candidates.ts # fetchJobs, fetchJob, submitApplication (FormData), fetchApplications
-│       ├── pages/
-│       │   ├── JobBoardPage.tsx    # Public candidate job board — search + job cards
-│       │   └── JobDetailPage.tsx   # Public job detail + CV upload apply form
-│       ├── hooks/
-│       │   └── useJDSession.ts  # State machine: idle→drafting→pending_approval→approved→publishing→published
-│       │                        #   Uses routeMessage() for context-aware dispatch (pipeline_state + history)
-│       │                        #   loadSession() restores past sessions from DB; sql badge support
-│       └── components/
-│           ├── auth/
-│           │   └── LoginPage.tsx        # Split layout: left lavender/purple panel (InvictusLogo SVG,
-│           │                            #   feature list, decorative blobs) + right login form;
-│           │                            #   ForgotPassword sub-component; demo account auto-fill
-│           ├── dashboard/
-│           │   └── DashboardHome.tsx    # Post-login landing: 6 task cards + chat textarea + send button
-│           │                            #   + 4 suggestion chips; cards above chat bar
-│           ├── jd/
-│           │   ├── JDChat.tsx           # Main chat interface with status header
-│           │   ├── ChatMessage.tsx      # Bubble renderer — user/assistant/system + streaming cursor;
-│           │   │                        #   SqlBadge with viewport-aware popover (flips up when near page bottom)
-│           │   ├── SessionSidebar.tsx   # Chat session history with folder organisation;
-│           │   │                        #   Folder (localStorage), SessionRow with status dot + ⋯ menu,
-│           │   │                        #   FolderSection (collapsible, inline rename/delete), ungrouped sessions
-│           │   ├── ApprovalBar.tsx      # Approve / Reject-with-feedback panel
-│           │   ├── PublishingPanel.tsx  # Post-approval publishing progress (per-platform status + links)
-│           │   ├── ApplicationsPanel.tsx # HR view: candidate list, AI scores, CV download, expand detail
-│           │   └── RequirementsForm.tsx # Structured JD requirements form
-│           ├── layout/
-│           │   └── PageShell.tsx        # Shared candidate-facing page shell (header + main wrapper)
-│           └── ui/                      # shadcn primitives: Button, Card, Input, Textarea, Badge, Label
-├── Data/
-│   ├── scrape_indeed.py  # Indeed scraper for seeding past JDs
-│   ├── scrapper.py
-│   └── seed_past_jds.py  # Seeds past_jds table with embeddings for RAG
-├── docker-compose.yml        # PostgreSQL 17 + pgvector container
-├── pytest.ini                # asyncio_mode=auto, testpaths=backend/tests
-└── pyproject.toml            # uv-managed Python deps
-```
-
 ## Running the App
 
 ```bash
-# 1. Start the database
+# 1. Start all services (Postgres + pgvector, Redis, Mailhog)
 docker compose up -d
 
 # 2. Start the backend (auto-reloads on file changes)
@@ -114,9 +24,42 @@ PYTHONPATH=backend .venv/bin/uvicorn app.main:app --app-dir backend --reload --p
 cd frontend && npm run dev -- --port 3000
 ```
 
-- Frontend: http://localhost:3000
-- Backend API docs: http://localhost:8000/docs
-- Health check: http://localhost:8000/health
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:3000 |
+| Backend API docs | http://localhost:8000/docs |
+| Health check | http://localhost:8000/health |
+| Mailhog (email preview) | http://localhost:8025 |
+
+## Running Tests
+
+```bash
+# All tests (no real DB or OpenAI calls — all mocked)
+cd /Users/navjeetkaur/Desktop/Capstone
+PYTHONPATH=backend .venv/bin/pytest -v
+
+# Single test file
+PYTHONPATH=backend .venv/bin/pytest backend/tests/test_sql_ast_validator.py -v
+
+# Single test by name
+PYTHONPATH=backend .venv/bin/pytest -v -k "test_name_here"
+```
+
+## RAG Evaluation (RAGAS)
+
+`backend/eval_rag.py` evaluates the pgvector retrieval pipeline across 4 RAGAS metrics:
+Faithfulness, Answer Relevancy, Context Precision, Context Recall.
+
+```bash
+# Offline — uses hardcoded golden dataset, no DB required (costs ~$0.01 OpenAI)
+OPENAI_API_KEY=sk-... PYTHONPATH=backend python backend/eval_rag.py
+
+# Live — real DB retrieval + JD agent generation
+OPENAI_API_KEY=sk-... PYTHONPATH=backend python backend/eval_rag.py --live
+```
+
+Saves results to `eval_rag_results.json`. Exits non-zero if any metric falls below threshold
+(0.70 for faithfulness/relevancy, 0.60 for precision/recall) — CI-safe.
 
 ## Demo Accounts (auto-seeded on startup)
 
@@ -132,6 +75,7 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o
 
 DATABASE_URL=postgresql+asyncpg://hiring_user:hiring_pass@localhost:5432/hiring_db?ssl=disable
+REDIS_URL=redis://localhost:6379/0
 RAG_TOP_K=5
 RAG_SIMILARITY_THRESHOLD=0.75
 
@@ -139,6 +83,14 @@ RAG_SIMILARITY_THRESHOLD=0.75
 ENCRYPTION_KEY=<fernet-key>   # generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 JWT_SECRET_KEY=<random-string>
 JWT_EXPIRE_MINUTES=480
+
+# SMTP (optional — app works without; local dev: point at Mailhog)
+SMTP_HOST=localhost
+SMTP_PORT=1025
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM=noreply@invictushiring.co
+SMTP_USE_TLS=false
 
 # Job board integrations (all optional — app works without them)
 LINKEDIN_ACCESS_TOKEN=
@@ -148,195 +100,208 @@ GOOGLE_SERVICE_ACCOUNT_JSON=   # full JSON of GCP service account key file (as s
 APP_BASE_URL=http://localhost:8000
 ```
 
-## Running Tests
+## Architecture
 
-```bash
-cd /Users/navjeetkaur/Desktop/Capstone
-.venv/bin/pytest -v
-# 37 tests — no real DB or OpenAI calls, all mocked
+### Agent Pipeline
+
+Six AI agents, all using OpenAI streaming or function calling, orchestrated by a supervisor:
+
+```
+User message
+    │
+    ▼
+Supervisor (gpt-4o-mini) — classifies into 8 intents:
+  jd_draft | jd_chat | jd_revise | approve | publish | analytics | ml_predict | other
+    │
+    ├─▶ Agent 1: JD Drafter (jd_agent.py)
+    │     extract_requirements → RAG (pgvector) → stream JD draft
+    │     revise on rejection feedback, increments draft version
+    │
+    ├─▶ Agent 2: Job Poster (job_poster_agent.py)
+    │     reformat JD per platform → publish LinkedIn/Indeed/Google Jobs
+    │     streams NDJSON progress events
+    │
+    ├─▶ Agent 3: CV Screener (cv_screener.py)
+    │     runs in background after candidate applies
+    │     extracts PDF/DOCX text → scores 0–100 + recommendation
+    │
+    ├─▶ Agent 4: Analytics (analytics_agent.py)
+    │     NLP → SQL via OpenAI → AST-validated → executed against Postgres
+    │
+    ├─▶ Agent 5: Interview Scheduler (interview_agent.py)
+    │     generates personalised invitation email + 5–7 tailored questions
+    │     HR reviews/edits → approve triggers SMTP send
+    │     generate_ics() produces .ics calendar file after scheduling
+    │
+    └─▶ Agent 6: ML Predictor (ml_agent.py)
+          NL query → gpt-4o-mini parses intent → runs fit/join model predictions
+          SHAP TreeExplainer computes per-candidate feature contributions
+          streams NDJSON: results (with explanations) first, then LLM narrative summary
+          POST /api/ml/predict
 ```
 
-## API Endpoints
+Every OpenAI call fires `agent_telemetry.fire_run()` as a background task — written to the `agent_runs` table with latency, token counts, prompt version, and agent-specific quality metrics. The analytics agent (`ANALYTICS_PROMPT_VERSION = "analytics-v1"`) now also records `sql_passed_validation`, `sql_blocked_reason`, `rows_returned`, and `has_session_context`. JD revision records `draft_version`. ML predictor records `prediction_type`, `candidate_count`, `shap_explanations`.
 
-### Auth
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/auth/login` | Email + password → JWT access token |
-| `GET`  | `/api/auth/me` | Returns authenticated user profile; used for token validation on mount |
-| `POST` | `/api/auth/forgot-password` | Accepts email, always returns 200 (prevents enumeration); logs if user found |
+### Request Flow
 
-### JD Drafter (Agent 1)
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/jd/draft-freetext` | Free-text requirements → extracts fields via OpenAI function calling → streams JD draft |
-| `POST` | `/api/jd/draft` | Structured requirements → streams JD draft |
-| `POST` | `/api/jd/chat` | Free-form chat to refine current draft (streams) |
-| `POST` | `/api/jd/approve` | `approved=true` → marks approved; `approved=false` + feedback → agent revises (streams) |
-| `GET`  | `/api/jd/sessions` | All sessions for authenticated user, newest first, with last_message_preview |
-| `GET`  | `/api/jd/session/{id}` | Returns session state, latest draft, and full chat history |
+1. JWT validated against `/api/auth/me` on every frontend mount
+2. Every chat message → `POST /analytics/route` (supervisor) → dispatch
+3. JD lifecycle: `drafting → pending_approval → approved → publishing → published`
+   - Published JDs can be reverted to `pending_approval` via `POST /api/jd/revert` for edits and republishing
+4. Candidate lifecycle: `Applied → AI Screened → Shortlisted → Interview Scheduled`
+5. Supervisor routing receives full session context: `session_id`, `job_title`, `job_department`, `pipeline_state`, `history`
 
-### Analytics / Supervisor
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/analytics/query` | NLP → SQL → result (streams) |
-| `POST` | `/analytics/route` | Supervisor routing — returns `RoutingDecision` (intent, confidence, reasoning, suggested_action) |
+### Conversation Caching (Redis)
 
-### Job Poster (Agent 2)
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/jobs/post/{session_id}` | Reformat approved JD for each platform + publish; streams NDJSON progress |
-| `GET`  | `/api/jobs/postings/{session_id}` | Returns all platform posting records for a session |
-| `GET`  | `/api/jobs/indeed-feed/{session_id}.xml` | Serves Indeed XML feed (crawled by Indeed) |
-| `GET`  | `/api/jobs/jobs/{session_id}` | Serves Google Jobs HTML page with schema.org JSON-LD |
+`app/core/redis.py` manages two Redis namespaces:
 
-### Candidate Job Board (public)
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/candidates/jobs` | All published JDs (no auth) |
-| `GET`  | `/api/candidates/jobs/{session_id}` | Single published job detail (no auth) |
-| `POST` | `/api/candidates/apply/{session_id}` | Submit application — multipart form with optional CV upload (no auth) |
+- **Chat history** — `conversation:{session_id}` (list, 24-hour TTL). On cache miss, falls back to Postgres `chat_messages`. `push_message` / `get_history` fail silently with a log warning — Redis is optional.
+- **Active session** — `active_session:{user_id}` (string, 30-day TTL). Persists the last JD session the user had open so it can be restored on page refresh. Managed via `PUT/GET/DELETE /api/auth/active-session`; the frontend calls these on session change, dashboard nav, and logout. Replaces the previous localStorage approach.
 
-### Candidate Applications (HR/HM only)
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/candidates/applications/{session_id}` | All applications for a session with AI screening results |
-| `GET`  | `/api/candidates/applications/{session_id}/cv/{application_id}` | Download candidate CV |
+### SQL Safety (Analytics Agent)
 
-### Agent Discovery (A2A)
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/.well-known/agents` | Agent registry — lists all hosted agents |
-| `GET`  | `/.well-known/jd-drafter/agent-card.json` | A2A agent card for JD Drafter |
-| `GET`  | `/.well-known/job-poster/agent-card.json` | A2A agent card for Job Poster |
+`app/services/sql_ast_validator.py` uses `sqlglot` to parse and walk the AST before executing any NLP-generated SQL. Blocks: non-SELECT statements, forbidden DML/DDL nodes, dangerous PostgreSQL functions (`pg_read_file`, `dblink`, etc.), unknown tables, and stacked queries. Belt-and-suspenders regex runs before the AST parse — trailing semicolons are stripped before the regex check to avoid false positives on valid single-statement queries.
 
-### Other
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/health` | Health check |
+Analytics responses are sanitised at two layers:
+- `_sanitise_output()` strips UUID and email patterns from the narrated answer before it reaches the frontend.
+- `_sanitise_sql_for_display()` replaces UUID/email literals in the SQL shown in the "View SQL" badge — the SQL that is actually executed is unaffected.
 
-## Key Flows
+The `_FORMAT_SYSTEM` prompt also instructs the model to never reference raw database identifiers and to write in plain conversational English. No NeMo Guardrails framework is used.
 
-### JD Drafting — Agent 1 (implemented)
-1. User logs in (JWT auth); token validated against `/api/auth/me` on mount
-2. Dashboard shown first (`DashboardHome`) — 6 task cards + chat bar + suggestion chips
-3. User types a job description in plain English
-4. Supervisor routes to `jd_draft` intent → `POST /api/jd/draft-freetext`
-5. OpenAI function calling extracts structured fields (title, dept, location, salary, skills)
-6. pgvector RAG retrieves similar past JDs from `past_jds` table (cosine similarity, `text-embedding-3-small`); retrieval scores logged per result
-7. OpenAI streams a full UK-compliant JD draft back to the chat
-8. HR/HM can refine via chat or approve/reject with feedback
-9. On rejection: agent auto-revises with feedback, increments draft version
-10. On approval: `status = "approved"` → PublishingPanel appears
+`_resolve_session_context()` looks up the active `JDRequest` by `session_id` and injects the real `request_id` and `title` into the SQL generation prompt, so queries like "how many candidates applied for this job?" produce correct WHERE clauses rather than placeholder titles.
 
-### Supervisor Routing (implemented)
-- Every user message is first sent to `POST /analytics/route`
-- Supervisor uses `gpt-4o-mini` with JSON response to classify into 7 intents: `jd_draft`, `jd_chat`, `jd_revise`, `approve`, `publish`, `analytics`, `other`
-- Routing considers `pipeline_state` (current JD status), `has_draft`, and recent chat history for context-aware decisions
-- Falls back to `other` on error or confidence < 0.5
+### Email (SMTP)
 
-### Job Posting — Agent 2 (implemented)
-1. HR clicks "Publish to Job Boards" in the PublishingPanel
-2. `POST /api/jobs/post/{session_id}` triggers the Job Poster agent
-3. For each platform (LinkedIn, Indeed UK, Google Jobs), OpenAI reformats the JD with platform-specific tone/structure/limits
-4. Each formatted JD is published to the real platform API (falls back gracefully if credentials not set)
-5. Progress streams as NDJSON: `start → chunk → posted → done`
-6. JobPosting records saved to DB; JD status moves to `published`
+`app/services/email_sender.py` sends three email types: interview invitations, password reset links, and application confirmations. All calls return `False` (not raise) when `SMTP_HOST` is empty. For local dev, docker-compose runs Mailhog at `localhost:1025`; web UI at `localhost:8025`.
 
-**Platform publishing mechanisms:**
-- **LinkedIn** — UGC Posts API (`POST /v2/ugcPosts`); requires `LINKEDIN_ACCESS_TOKEN` + `LINKEDIN_AUTHOR_URN`
-- **Indeed UK** — XML job feed written to `indeed_feeds/` and served at `/indeed-feed/{id}.xml`; optionally pings Indeed Employer API to re-index
-- **Google Jobs** — schema.org/JobPosting JSON-LD page written to `job_pages/` and served at `/jobs/{id}`; optionally calls Google Indexing API for fast crawl
+### Platform Publishing
 
-### Candidate Job Board (implemented)
-1. Published JDs appear at `http://localhost:3000/jobs` — no login required
-2. Candidates click a role → full JD detail + apply form at `/jobs/{session_id}`
-3. Apply form: name, email, phone (optional), CV upload (PDF/DOCX/TXT, max 5 MB), cover letter
-4. `POST /api/candidates/apply/{session_id}` — saves application, triggers background CV screening
-5. CV screener extracts text (pypdf / python-docx) then calls OpenAI to score against job requirements
-6. Screening result (0–100 score, recommendation, strengths, gaps) saved to `candidate_applications`
-7. HR sees ApplicationsPanel in the dashboard once a JD is published — lists all applicants with AI scores, CV download, and full screening breakdown; polls every 10 s while any application is still being screened
+- **Internal job board** — always live at `/jobs` (frontend route) once `status = "published"`; no credentials needed
+- **LinkedIn** — UGC Posts API; requires `LINKEDIN_ACCESS_TOKEN` + `LINKEDIN_AUTHOR_URN`. Without credentials: demo mode returns a fake URL, no real API call
+- **Indeed UK** — XML feed written to `indeed_feeds/` at `/indeed-feed/{id}.xml`; feed is always generated; `INDEED_PUBLISHER_ID` only needed to ping re-crawl
+- **Google Jobs** — schema.org JSON-LD page at `job_pages/` served at `/jobs/{id}`; page is always generated; `GOOGLE_SERVICE_ACCOUNT_JSON` only needed to ping the Indexing API
 
-### Interview Scheduling — not yet built
-### Offer Letter — out of scope for V1
+All three external platforms fail gracefully when credentials are absent.
+
+**Publish commit pattern** — `POST /api/jobs/post/{session_id}` streams NDJSON via `StreamingResponse`. The final DB writes (`req.status = "published"`, `JobPosting` rows) happen inside the async generator using a **fresh `AsyncSessionLocal()` session**, not the request-scoped `db`. This is intentional: the request-scoped session lifecycle can end before the generator finishes, causing the commit to silently fail.
+
+### ML Models
+
+Two GradientBoosting classifiers trained on IBM HR Analytics + synthetic negatives:
+
+- **Fit model** (`ml_models/fit_model.joblib`) — predicts hire probability from screening score, skill overlap, seniority, etc. CV ROC-AUC 0.991.
+- **Join model** (`ml_models/join_model.joblib`) — predicts offer-acceptance probability from interview format, days to respond, etc. CV ROC-AUC 0.879.
+
+Both are lazy-loaded at first call by `ml_predictor.py`. Each model is saved as a dict bundle `{"pipeline": sklearn.Pipeline, "features": [...]}` — not the pipeline directly, because `feature_names_in_` is read-only on Pipeline. The pipeline is `StandardScaler → GradientBoostingClassifier`.
+
+**SHAP explainability** — `explain_fit()` and `explain_join()` in `ml_predictor.py` use `shap.TreeExplainer` on the GBT step. Input is pre-processed through the StandardScaler before SHAP runs. Returns top 5 features sorted by absolute contribution as `[{feature, label, contribution, direction, raw_value}]`. Human-readable labels are defined in `_FIT_LABELS` / `_JOIN_LABELS` dicts. LIME is not used — it does not support Python 3.13. The `shap` package is installed via `uv pip install shap --python .venv/bin/python3`.
+
+Explanations are attached to every `results` NDJSON event from the ML agent and rendered in the chat UI as collapsible "Why this score?" factor bars (`MlResultCard` in `ChatMessage.tsx`). Green bars = pushed score up, red = pushed it down.
+
+Training data prep: `Data/prepare_kaggle_data.py` (IBM HR Analytics + 700 synthetic negatives per model).
+Re-train: `PYTHONPATH=backend python backend/ml_train.py --source csv --csv-path Data/combined_dataset.csv`
+
+ML outcome labels are recorded by HR via `POST /api/candidates/applications/{id}/outcome` after a hiring decision. These populate `outcome`, `offer_accepted`, etc. on `CandidateApplication` for future training.
+
+### PII / Auth
+
+- Emails stored encrypted (Fernet) + SHA-256 blind index for lookup
+- Passwords bcrypt-hashed
+- JWT (HS256) carries role (`hr`|`hm`) for RBAC; `get_current_user` / `require_role` FastAPI deps in `app/core/dependencies.py`
+- CV files served only to authenticated HR from `cv_uploads/`
 
 ## Database Models
 
 ```
-User                  — application user (email_hash SHA-256, email_encrypted Fernet, bcrypt password, role: hr|hm)
-JDRequest             — one per submission (session_id, submitted_by, role, title, dept, location, salary_band,
-                        required_skills, nice_to_have_skills, company_description, status)
-JDDraft               — one per draft version (request_id, version, content, rejection_feedback)
-ChatMessage           — chat history (request_id, role: user|assistant, content)
-PastJD                — historical approved JDs for RAG (title, dept, content, embedding: vector(1536))
-JobPosting            — platform posting record (request_id, platform, formatted_content, post_url, status: posted|failed)
-CandidateApplication  — candidate application (request_id, name, email, phone, cover_letter,
-                        cv_filename, cv_path, screening_status: pending|screened|failed,
-                        screening_score 0–100, screening_summary, screening_strengths JSON,
-                        screening_gaps JSON, screening_recommendation: strong_match|good_match|partial_match|poor_match)
+AgentRun              — one record per OpenAI call (agent_name, operation, prompt_version,
+                        model, status, latency_ms, input/output tokens, metrics JSON)
+User                  — email_hash (SHA-256), email_encrypted (Fernet), bcrypt password, role
+JDRequest             — session_id, title, dept, location, salary_band, skills, status,
+                        published_at, expires_at, max_applications
+JDDraft               — request_id, version, content, rejection_feedback
+ChatMessage           — request_id, role (user|assistant), content
+PastJD                — title, dept, content, embedding vector(1536) for RAG
+JobPosting            — request_id, platform, formatted_content, post_url, status
+CandidateApplication  — name, email, phone, cover_letter (text), cover_letter_filename,
+                        CV (filename + path), screening results (score 0–100,
+                        recommendation, strengths/gaps JSON), shortlisted bool,
+                        interview_status, interview_scheduled_at, format, location, notes,
+                        outcome, outcome_recorded_at, offer_extended, offer_amount,
+                        offer_date, offer_accepted, offer_declined_reason,
+                        interview_rounds, days_to_respond
+InterviewInvitation   — application_id, AI-generated email_subject/body/questions,
+                        HR-approved final_recipient/subject/body, email_sent_at
 ```
 
-### JD Draft States
+## Migrations
+
+Apply manually via docker after the initial Docker setup:
+
+```bash
+docker exec hiring_postgres psql -U hiring_user -d hiring_db \
+  -f /docker-entrypoint-initdb.d/003_interview_scheduling.sql
+
+# Or run SQL directly:
+docker exec hiring_postgres psql -U hiring_user -d hiring_db \
+  -c "ALTER TABLE ..."
 ```
-drafting → pending_approval → approved → publishing → published
+
+Migration files in `backend/migrations/`:
+- `001_init.sql` — auto-runs via Docker entrypoint
+- `002_candidate_cv_screening.sql` — manual
+- `003_interview_scheduling.sql` — manual
+- `004_agent_runs.sql` — manual
+- `005_ml_outcome_fields.sql` — adds outcome/offer/interview_rounds columns to `candidate_applications`
+- `006_cover_letter_file.sql` — adds `cover_letter_filename` column to `candidate_applications`
+- `007_job_expiry.sql` — adds `expires_at`, `max_applications`, `published_at` to `jd_requests`
+
+## Key Architectural Conventions
+
+- **All AI responses stream** — `jd_agent.py`, `job_poster_agent.py` use `async for chunk in stream`. The analytics agent streams NDJSON.
+- **Telemetry is always fire-and-forget** — `asyncio.create_task(fire_run(...))` in every agent; never awaited inline.
+- **RAG logs retrieval scores** — `rag.py` logs title + cosine similarity for every retrieved PastJD.
+- **Supervisor falls back gracefully** — returns intent `other` on error or confidence < 0.5.
+- **Frontend state machine** — `useJDSession.ts` drives the UI through `idle → drafting → pending_approval → approved → publishing → published`. Published JDs can be reverted via "Revise JD & Republish" button.
+- **Session context flows to all agents** — `useJDSession` tracks `sessionTitle` and `sessionDepartment`; these are passed to the supervisor routing and analytics/ML endpoints on every request.
+- **A2A agent cards** — `/.well-known/agents`, `/.well-known/jd-drafter/agent-card.json`, `/.well-known/job-poster/agent-card.json`, `/.well-known/ml-predictor/agent-card.json` expose agents to external systems.
+- **Cover letter upload** — candidates can type a cover letter OR upload a PDF/DOCX/TXT file. The backend extracts text via `_extract_sync` (same as CV screener) and stores it in the `cover_letter` text column; original filename goes in `cover_letter_filename`. The frontend uses a Write/Upload toggle in the application form.
+- **Job expiry & application cap** — `POST /api/jobs/post/{session_id}` accepts `expires_at` (ISO date) and `max_applications` (int). Jobs stop accepting applications when either threshold is hit; both are checked at query time and at submission time. The `max_applications` cap filter is applied in SQL (not Python post-processing) so `OFFSET`/`LIMIT` pagination works correctly.
+- **Job board pagination** — `GET /api/candidates/jobs` accepts `page` (default 1) and `page_size` (default 10, max 100) query params; returns `{ jobs, total, page, page_size, total_pages }`. The frontend (`JobBoardPage`) paginates with prev/next + numbered page buttons and a "Showing X–Y of N roles" counter.
+- **JD structured fields sync** — `jd_requests.location` and `jd_requests.salary_band` are updated whenever a new `JDDraft` is saved (both the rejection-revision path and the chat path). `_parse_location_salary()` in `routes/jd.py` extracts these from the draft markdown using section-header regex.
+- **Chat → draft promotion** — the `/jd/chat` endpoint saves the agent reply as a new `JDDraft` version when the reply looks like a full JD: contains `##` headers, starts with `#` and is >300 chars, or contains `**Job Title` / `**About the Company` bold-label sections. This ensures approval and the job board always see the latest chat-revised content.
+- **Stream sentinel buffering** — `readDraftStream()` in `api/jd.ts` buffers the tail of each streaming response so the `__SESSION_ID__` sentinel is never rendered in the chat UI even if it arrives split across TCP chunks.
+- **Analytics output guardrail** — Two sanitisation functions: `_sanitise_output()` strips UUIDs/emails from narrated text; `_sanitise_sql_for_display()` redacts them from the SQL badge. Execution SQL is never altered. No NeMo Guardrails framework is used.
+- **Analytics session context** — `_resolve_session_context()` in `analytics_agent.py` resolves the active session's real `request_id` and `title` and injects them into the SQL prompt so "this job" / "this role" references produce correct WHERE clauses.
+- **Context window per agent** — Supervisor caps history at `history[-6:]`. JD agents (`stream_chat_reply`, `stream_revision`) pass full unbounded history via `messages.extend(history)` — no sliding window yet. RAG references are each truncated to 1 200 chars. Analytics fetches at most 50 DB rows and passes the first 20 to the formatter.
+- **ML results rendered in chat** — `results` NDJSON events from the ML agent are attached to the assistant message as `mlData: MlResult[]`. `MlResultCard` in `ChatMessage.tsx` renders score gauges (Screen / Fit / Join) and collapsible SHAP factor bars per candidate. The `results` event arrives before the text chunks so the UI can render cards immediately.
+- **Prompt versions** — every agent has a hardcoded `*_PROMPT_VERSION` constant (`jd-v1`, `supervisor-v1`, `analytics-v1`, `screen-v1`, `ml-agent-v1`) written to `agent_runs`. These must be manually incremented when prompts change — there is no automatic versioning.
+
+### Agent Quality Telemetry
+
+`GET /api/telemetry/quality?days=30` — aggregates `agent_runs` + `jd_drafts` + `candidate_applications` into a single quality report. Requires JWT. Returns:
+
+- **routing** — intent distribution, per-intent avg confidence, low-confidence count
+- **drafting** — avg draft versions before approval (from `jd_drafts.version` at approval time), off-topic block rate from chat
+- **screening** — recommendation breakdown with score min/avg/max, score bucket distribution (0–39 / 40–59 / 60–79 / 80–100)
+- **analytics** — SQL pass rate, blocked count, SQL execution errors, avg rows returned
+- **ml** — prediction type mix, avg candidates per query, total SHAP explanations generated
+- **errors** — per-agent error rate %
+- **latency** — avg + p95 per agent/operation
+- **daily_trend** — 14-day rolling run + error volume per agent
+
+The `QualityPanel` component in `frontend/src/components/dashboard/QualityPanel.tsx` fetches this on dashboard mount and renders stat cards + bar charts. Empty state is shown until the platform has been used. The panel is rendered below the feature cards in `DashboardHome.tsx`.
+
+## MCP Server
+
+FastMCP stdio server at `backend/hiring_mcp/server.py` — exposes DB tools and platform posting tools for Claude Desktop or external agents.
+
+```bash
+PYTHONPATH=backend python backend/hiring_mcp/server.py
 ```
-
-### Candidate Pipeline States (planned)
-```
-Applied → AI Screened → HR Shortlist Review → HM Shortlist Review
-→ Interview Scheduled → Interviewed → [Offer] → Hired / Rejected
-```
-
-## MCP Server (`backend/hiring_mcp/server.py`)
-
-FastMCP stdio server exposing tools for external AI agents and Claude Desktop:
-
-| Tool | Description |
-|------|-------------|
-| `db_list_sessions` | List recent JD sessions |
-| `db_get_session` | Full session detail (request, draft, chat, postings) |
-| `db_search_similar_jds` | pgvector cosine similarity search over past JDs |
-| `db_get_postings` | Job posting records for a session |
-| `linkedin_post_job` | Publish to LinkedIn UGC Posts API |
-| `indeed_post_job` | Generate XML feed + optional re-index notify |
-| `google_jobs_post_job` | Generate JSON-LD page + optional Indexing API notify |
-
-Run standalone: `PYTHONPATH=backend python backend/hiring_mcp/server.py`
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Backend | Python 3.13, FastAPI, SQLAlchemy (async), asyncpg |
-| AI | OpenAI (`gpt-4o`), function calling, streaming |
-| Embeddings | `text-embedding-3-small` (1536 dims) |
-| Vector DB | PostgreSQL 17 + pgvector 0.8.2 |
-| ORM | SQLAlchemy 2.0 mapped columns |
-| Auth | JWT (HS256 via python-jose), bcrypt passwords, Fernet email encryption |
-| Logging | Loguru — console (coloured) + JSON file + stdlib intercept for SQLAlchemy |
-| MCP | FastMCP stdio server (hiring_mcp/) |
-| Frontend | React 19, Vite, TypeScript, Tailwind CSS v4, shadcn/ui, Radix UI |
-| Fonts | Inter (Google Fonts, weights 300–700, loaded via index.html preconnect) |
-| Testing | pytest, pytest-asyncio, pytest-mock, httpx (AsyncClient) |
-| Infra | Docker Compose (postgres container), uv (Python deps) |
-
-## Design Decisions
-
-- **Free-text chat input** — no form; users describe the role in plain English, OpenAI extracts structured fields via function calling
-- **Streaming first** — all AI responses stream chunk-by-chunk; frontend renders live with a blinking cursor
-- **Human-in-the-loop** — every JD requires explicit HR approval before publishing; rejections trigger auto-revision with feedback
-- **RAG on past JDs** — new drafts reference approved historical JDs for consistent tone and structure; stored in `past_jds` with pgvector embeddings; retrieval scores logged per result
-- **Session-based** — each drafting session has a UUID, persists full chat history and all draft versions in Postgres
-- **Supervisor orchestration** — every message is classified by a lightweight `gpt-4o-mini` supervisor before dispatch; routing is context-aware (pipeline state + history); falls back gracefully on low confidence
-- **Two-agent pipeline** — Agent 1 (JD Drafter) feeds into Agent 2 (Job Poster); both expose A2A-compliant agent cards
-- **PII-safe auth** — emails stored encrypted (Fernet) with a SHA-256 blind index for lookup; passwords bcrypt-hashed; JWT carries role for RBAC; token validated on every page mount via `/api/auth/me`
-- **Graceful job board fallback** — all three platform integrations fail gracefully if credentials aren't configured; demo works without any API keys
-- **Split login layout** — left panel (lavender/purple gradient, InvictusLogo SVG, feature list) + right login form; forgot-password flow built in; demo account auto-fill buttons
-- **Dashboard-first UX** — after login, users see a task overview dashboard (`DashboardHome`) before entering any specific flow; chat bar on dashboard switches to JD chat view on send
 
 ## What Is Not Yet Built
 
-- [x] Left sidebar — session history with folder grouping (implemented: `SessionSidebar.tsx`)
-- [ ] Interview scheduling — Google Calendar self-scheduling link
-- [ ] Candidate portal — application status, round feedback
-- [ ] HM / HR separate dashboards
-- [ ] Offer letter generation (out of scope V1)
+- Candidate portal (application status, round feedback)
+- HM / HR separate dashboards
+- Offer letter generation (out of scope V1)
+- RAGAS live evaluation wired into CI (currently run manually)

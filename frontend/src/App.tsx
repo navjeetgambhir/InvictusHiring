@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { Briefcase, LogOut, LayoutDashboard } from 'lucide-react'
+import { Briefcase, LogOut, LayoutDashboard, PanelLeftOpen } from 'lucide-react'
 import { JDChat } from '@/components/jd/JDChat'
 import { SessionSidebar } from '@/components/jd/SessionSidebar'
 import { DashboardHome } from '@/components/dashboard/DashboardHome'
 import { LoginPage } from '@/components/auth/LoginPage'
+import { ApplicationsPanel } from '@/components/jd/ApplicationsPanel'
+import { InterviewPanel } from '@/components/jd/InterviewPanel'
+import { PublishingPanel } from '@/components/jd/PublishingPanel'
 import { useJDSession } from '@/hooks/useJDSession'
-import { getStoredUser, getToken, clearUser, type User } from '@/api/auth'
+import { getStoredUser, getToken, clearUser, saveActiveSession, loadActiveSession, clearActiveSession, type User } from '@/api/auth'
 import { JobBoardPage } from '@/pages/JobBoardPage'
 import { JobDetailPage } from '@/pages/JobDetailPage'
 
@@ -42,13 +45,33 @@ function HRApp() {
 
   if (checking) return null
   if (!user) return <LoginPage onLogin={setUser} />
-  return <AuthenticatedApp user={user} onLogout={() => { clearUser(); setUser(null) }} />
+  return <AuthenticatedApp user={user} onLogout={() => { clearActiveSession(); clearUser(); setUser(null) }} />
 }
 
 function AuthenticatedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const session = useJDSession(user.email, user.role as Role)
   const [view, setView] = useState<View>('dashboard')
   const [sidebarRefresh, setSidebarRefresh] = useState(0)
+  const [interviewRefresh, setInterviewRefresh] = useState(0)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+
+  // On first mount, restore the last active session from Redis
+  useEffect(() => {
+    loadActiveSession().then(savedId => {
+      if (savedId) {
+        session.loadSession(savedId)
+        setView('jd-chat')
+      }
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Persist active session to Redis whenever it changes
+  useEffect(() => {
+    if (session.sessionId) {
+      saveActiveSession(session.sessionId)
+    }
+  }, [session.sessionId])
 
   // Refresh sidebar whenever a new session is saved
   useEffect(() => {
@@ -60,6 +83,7 @@ function AuthenticatedApp({ user, onLogout }: { user: User; onLogout: () => void
       window.open('/jobs', '_blank')
       return
     }
+    session.setEntryPoint(destination)
     setView('jd-chat')
   }
 
@@ -71,6 +95,7 @@ function AuthenticatedApp({ user, onLogout }: { user: User; onLogout: () => void
 
   function goToDashboard() {
     setView('dashboard')
+    clearActiveSession()
   }
 
   return (
@@ -127,17 +152,52 @@ function AuthenticatedApp({ user, onLogout }: { user: User; onLogout: () => void
         <DashboardHome user={user} onNavigate={handleNavigate} onSend={handleSend} />
       ) : (
         <div className="flex flex-1 overflow-hidden">
-          <SessionSidebar
-            activeSessionId={session.sessionId}
-            onSelect={session.loadSession}
-            onNew={session.reset}
-            refreshTrigger={sidebarRefresh}
-          />
-          <main className="flex-1 p-4 overflow-hidden">
-            <div className="rounded-2xl border border-violet-200 bg-white shadow-sm overflow-hidden h-full">
-              <JDChat session={session} onReset={session.reset} />
+          {!sidebarCollapsed && (
+            <SessionSidebar
+              activeSessionId={session.sessionId}
+              onSelect={session.loadSession}
+              onNew={() => { session.reset(); clearActiveSession() }}
+              refreshTrigger={sidebarRefresh}
+              userId={user.email}
+              onCollapse={() => setSidebarCollapsed(true)}
+            />
+          )}
+          <main className="flex-1 p-4 overflow-hidden flex flex-col gap-2">
+            {sidebarCollapsed && (
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                title="Show sidebar"
+                className="self-start flex items-center gap-1.5 px-2 py-1 rounded-lg text-stone-400 hover:bg-violet-100 hover:text-violet-600 transition-colors text-xs"
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </button>
+            )}
+            <div className="rounded-2xl border border-violet-200 bg-white shadow-sm overflow-hidden flex-1">
+              <JDChat session={session} onReset={() => { session.reset(); clearActiveSession() }} />
             </div>
           </main>
+          {(['approved', 'publishing', 'published'] as const).includes(session.status as 'approved' | 'publishing' | 'published') && session.sessionId && (
+            <aside className="w-96 shrink-0 p-4 overflow-y-auto flex flex-col gap-4">
+              <PublishingPanel
+                status={session.status}
+                postings={session.postings}
+                onPublish={session.publish}
+                onRevert={session.revertForRevision}
+              />
+              {session.status === 'published' && (
+                <>
+                  <ApplicationsPanel
+                    sessionId={session.sessionId}
+                    onShortlistChange={() => setInterviewRefresh(n => n + 1)}
+                  />
+                  <InterviewPanel
+                    sessionId={session.sessionId}
+                    refreshTrigger={interviewRefresh}
+                  />
+                </>
+              )}
+            </aside>
+          )}
         </div>
       )}
     </div>

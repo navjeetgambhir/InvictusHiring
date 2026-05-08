@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, String, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import Boolean, SmallInteger, String, Text, DateTime, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -101,6 +101,9 @@ class JDRequest(Base):
 
     status: Mapped[str] = mapped_column(String(50), default="drafting")  # drafting | pending_approval | approved | rejected | published
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    max_applications: Mapped[int | None] = mapped_column(nullable=True)
 
     drafts: Mapped[list["JDDraft"]] = relationship("JDDraft", back_populates="request", order_by="JDDraft.version")
     messages: Mapped[list["ChatMessage"]] = relationship("ChatMessage", back_populates="request", order_by="ChatMessage.created_at")
@@ -146,6 +149,7 @@ class CandidateApplication(Base):
     email: Mapped[str] = mapped_column(String(255))
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     cover_letter: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cover_letter_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # CV file
     cv_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -169,6 +173,21 @@ class CandidateApplication(Base):
     interview_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # ML outcome labels — recorded by HR after a hiring decision is made
+    outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)                   # hired | rejected | withdrew | no_hire
+    outcome_recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Offer stage — recorded by HR; target labels for join prediction model
+    offer_extended: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    offer_amount: Mapped[str | None] = mapped_column(String(100), nullable=True)             # free-text, e.g. "£55,000"
+    offer_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    offer_accepted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    offer_declined_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)     # competing_offer | salary | role_fit | location | other
+
+    # Extra signal for join prediction features
+    interview_rounds: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)        # total rounds completed
+    days_to_respond: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)         # days between invite sent and candidate reply
 
     request: Mapped["JDRequest"] = relationship("JDRequest", back_populates="applications")
     invitations: Mapped[list["InterviewInvitation"]] = relationship("InterviewInvitation", back_populates="application", order_by="InterviewInvitation.created_at")

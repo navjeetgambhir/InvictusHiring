@@ -5,9 +5,6 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { ChatMessageBubble } from './ChatMessage'
 import { ApprovalBar } from './ApprovalBar'
-import { PublishingPanel } from './PublishingPanel'
-import { ApplicationsPanel } from './ApplicationsPanel'
-import { InterviewPanel } from './InterviewPanel'
 import type { useJDSession, Message } from '@/hooks/useJDSession'
 import type { SessionStatus } from '@/hooks/useJDSession'
 
@@ -75,14 +72,14 @@ function FollowUpChips({ status, onSend }: { status: SessionStatus; onSend: (msg
 }
 
 export function JDChat({ session, onReset }: Props) {
-  const { messages, status, error, postings, sendMessage, approve, reject, publish } = session
+  const { messages, status, error, sendMessage, approve, reject } = session
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
   const isStreaming = status === 'drafting' || status === 'publishing'
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, postings])
+  }, [messages])
 
   const send = (msg?: string) => {
     const text = (msg ?? input).trim()
@@ -100,8 +97,6 @@ export function JDChat({ session, onReset }: Props) {
     : status === 'pending_approval' ? 'Ask to refine the JD, e.g. "Make the tone more formal"'
     : status === 'published'        ? 'Ask about applicants, scores, or hiring data…'
     : 'JD has been finalised'
-
-  const showPublishingPanel = status === 'approved' || status === 'publishing' || status === 'published'
 
   // Show follow-ups only after the last assistant message has finished streaming
   const lastMessage = messages[messages.length - 1]
@@ -136,20 +131,8 @@ export function JDChat({ session, onReset }: Props) {
       {showFollowUps && <FollowUpChips status={status} onSend={send} />}
 
       {/* Bottom action area */}
-      <div className="px-6 pb-3 shrink-0 flex flex-col gap-3">
+      <div className="px-6 pb-3 overflow-y-auto flex flex-col gap-3 max-h-72 shrink-0">
         <ApprovalBar status={status} onApprove={approve} onReject={reject} />
-
-        {showPublishingPanel && (
-          <PublishingPanel status={status} postings={postings} onPublish={publish} />
-        )}
-
-        {status === 'published' && session.sessionId && (
-          <ApplicationsPanel sessionId={session.sessionId} />
-        )}
-
-        {status === 'published' && session.sessionId && (
-          <InterviewPanel sessionId={session.sessionId} />
-        )}
       </div>
 
       {/* Chat input — hidden once finalised */}

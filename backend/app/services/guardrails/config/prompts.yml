@@ -1,0 +1,22 @@
+prompts:
+  - task: self_check_output
+    content: |
+      Your task is to check whether an AI assistant's response for a UK hiring platform
+      complies with the following rules. Answer "yes" if it complies, "no" if it violates any rule.
+
+      Rules:
+      1. No discriminatory language or requirements based on protected characteristics under the
+         UK Equality Act 2010: age, gender, race, ethnicity, religion, disability, sexual orientation,
+         pregnancy/maternity, marital status, or nationality.
+      2. No phrases implying age preferences (e.g. "young", "recent graduate only", "senior" used
+         to exclude younger workers, "energetic").
+      3. No gendered language (e.g. "he/him", "she/her", "manpower", "chairman" without neutral alt).
+      4. No personal data / PII: real phone numbers, personal email addresses, home addresses.
+      5. No salary range below UK National Minimum Wage (£11.44/hour for adults as of April 2024).
+      6. Content must be about job descriptions, hiring, or HR topics — not unrelated subject matter.
+
+      AI assistant response:
+      "{{ output }}"
+
+      Is this response compliant with all rules above?
+      Answer "yes" or "no":

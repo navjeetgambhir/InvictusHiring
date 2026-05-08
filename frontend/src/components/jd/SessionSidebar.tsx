@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import {
   PlusIcon, FolderPlusIcon, FolderIcon, FolderOpenIcon,
   MessageSquareIcon, ChevronRightIcon, MoreHorizontalIcon,
-  PencilIcon, TrashIcon, FolderInputIcon, CheckIcon,
+  PencilIcon, TrashIcon, FolderInputIcon, CheckIcon, PanelLeftClose,
 } from 'lucide-react'
 import { fetchSessions, type SessionSummary } from '@/api/jd'
 
@@ -15,13 +15,15 @@ interface Folder {
   collapsed: boolean
 }
 
-const FOLDERS_KEY = 'invictus_folders'
-
-function loadFolders(): Folder[] {
-  try { return JSON.parse(localStorage.getItem(FOLDERS_KEY) || '[]') } catch { return [] }
+function foldersKey(userId: string) {
+  return `invictus_folders_${userId}`
 }
-function saveFolders(folders: Folder[]) {
-  localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders))
+
+function loadFolders(userId: string): Folder[] {
+  try { return JSON.parse(localStorage.getItem(foldersKey(userId)) || '[]') } catch { return [] }
+}
+function saveFolders(folders: Folder[], userId: string) {
+  localStorage.setItem(foldersKey(userId), JSON.stringify(folders))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -233,12 +235,14 @@ interface Props {
   onSelect: (sessionId: string) => void
   onNew: () => void
   refreshTrigger?: number
+  userId: string
+  onCollapse?: () => void
 }
 
-export function SessionSidebar({ activeSessionId, onSelect, onNew, refreshTrigger }: Props) {
+export function SessionSidebar({ activeSessionId, onSelect, onNew, refreshTrigger, userId, onCollapse }: Props) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [loading, setLoading]   = useState(true)
-  const [folders, setFolders]   = useState<Folder[]>(loadFolders)
+  const [folders, setFolders]   = useState<Folder[]>(() => loadFolders(userId))
 
   useEffect(() => {
     setLoading(true)
@@ -248,7 +252,7 @@ export function SessionSidebar({ activeSessionId, onSelect, onNew, refreshTrigge
       .finally(() => setLoading(false))
   }, [refreshTrigger])
 
-  function persist(next: Folder[]) { setFolders(next); saveFolders(next) }
+  function persist(next: Folder[]) { setFolders(next); saveFolders(next, userId) }
 
   function addFolder() {
     const name = `Folder ${folders.length + 1}`
@@ -296,6 +300,12 @@ export function SessionSidebar({ activeSessionId, onSelect, onNew, refreshTrigge
             className="p-1 rounded-lg text-stone-400 hover:bg-violet-100 hover:text-violet-600 transition-colors">
             <PlusIcon className="h-4 w-4" />
           </button>
+          {onCollapse && (
+            <button onClick={onCollapse} title="Hide sidebar"
+              className="p-1 rounded-lg text-stone-400 hover:bg-violet-100 hover:text-violet-600 transition-colors">
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 

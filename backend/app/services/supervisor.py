@@ -84,6 +84,8 @@ from typing import AsyncIterator, AsyncGenerator
 
 from loguru import logger
 from openai import AsyncOpenAI
+from langsmith import traceable
+from langsmith.wrappers import wrap_openai
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -96,15 +98,16 @@ from app.services.jd_agent import (
 from app.services.job_poster_agent import stream_job_postings
 from app.services.cv_screener import run_screening
 from app.services.analytics_agent import stream_analytics_response
+from app.services.ml_agent import stream_ml_predictions
 from app.services.agent_telemetry import fire_run
 
-_client = AsyncOpenAI(api_key=settings.openai_api_key)
+_client = wrap_openai(AsyncOpenAI(api_key=settings.openai_api_key))
 
 SUPERVISOR_PROMPT_VERSION = "supervisor-v1"
 
 # ── Routing decision ──────────────────────────────────────────────────────────
 
-VALID_INTENTS = {"jd_draft", "jd_chat", "jd_revise", "approve", "publish", "analytics", "other"}
+VALID_INTENTS = {"jd_draft", "jd_chat", "jd_revise", "approve", "publish", "analytics", "ml_predict", "other"}
 
 @dataclass
 class RoutingDecision:
@@ -149,6 +152,11 @@ INTENT DEFINITIONS — read carefully, they are state-dependent:
   analytics   A data question about applications, candidates, JD statuses, counts, or reports.
               Always valid regardless of state.
 
+  ml_predict  A question about ML-predicted candidate fit scores or offer acceptance (join) probabilities.
+              Triggered by: "fit score", "fit probability", "join prediction", "likely to accept",
+              "who is the best fit", "rank candidates", "join probability", "offer acceptance".
+              Always valid regardless of state.
+
   other       Greetings, thanks, off-topic, or unclear.
 
 ADAPTATION RULES:
@@ -164,11 +172,14 @@ ADAPTATION RULES:
 """
 
 
+@traceable(name="supervisor.route", run_type="chain", tags=["supervisor"])
 async def supervisor_route(
     message: str,
     pipeline_state: str,
     history: list[dict] | None = None,
     has_draft: bool = False,
+    job_title: str | None = None,
+    job_department: str | None = None,
 ) -> RoutingDecision:
     """
     Context-aware routing decision.
@@ -187,6 +198,10 @@ async def supervisor_route(
         f"pipeline_state: {pipeline_state}\n"
         f"has_draft: {has_draft}\n"
     )
+    if job_title:
+        context_block += f"active_job_title: {job_title}\n"
+    if job_department:
+        context_block += f"active_job_department: {job_department}\n"
     if history:
         recent = history[-6:]
         context_block += "recent_history:\n" + "\n".join(
@@ -324,13 +339,14 @@ def agent1_revise(
     current_draft: str,
     history: list[dict],
     session_id: str | None = None,
+    draft_version: int = 2,
 ) -> AsyncIterator[str]:
     """
     Auto-revision triggered when HR rejects with written feedback.
     Streams a new draft version; the route bumps draft.version and saves it.
     """
     logger.info(f"Supervisor | Agent 1 — revision | feedback='{feedback[:60]}…'")
-    return stream_revision(feedback, current_draft, history, session_id=session_id)
+    return stream_revision(feedback, current_draft, history, session_id=session_id, draft_version=draft_version)
 
 
 # ── Agent 2: Job Poster ───────────────────────────────────────────────────────
@@ -375,7 +391,7 @@ async def agent3_screen(application_id: uuid.UUID, db: AsyncSession) -> None:
 
 # ── Agent 4: NLP→SQL Analytics ────────────────────────────────────────────────
 
-def agent4_query(question: str, db: AsyncSession) -> AsyncIterator[str]:
+def agent4_query(question: str, db: AsyncSession, session_id: str | None = None) -> AsyncIterator[str]:
     """
     Answers natural language questions about hiring data by:
       1. Generating a safe read-only SELECT query from the question (OpenAI)
@@ -394,5 +410,37 @@ def agent4_query(question: str, db: AsyncSession) -> AsyncIterator[str]:
       "Which roles have the most strong_match candidates?"
       "Show me all published JDs in the Engineering department."
     """
-    logger.info(f"Supervisor | Agent 4 — NLP→SQL | question='{question[:80]}'")
-    return stream_analytics_response(question, db)
+    logger.info(f"Supervisor | Agent 4 — NLP→SQL | question='{question[:80]}' session={session_id}")
+    return stream_analytics_response(question, db, session_id=session_id)
+
+
+# ── Agent 6: ML Predictor ─────────────────────────────────────────────────────
+
+def agent6_predict(
+    question: str,
+    db: AsyncSession,
+    session_id: str | None = None,
+) -> AsyncIterator[str]:
+    """
+    Answers natural language questions about ML-predicted candidate fit and
+    offer acceptance (join) probability.
+
+    Streams NDJSON lines:
+      {"type": "results", "data": [...]}  — structured predictions for UI rendering
+      {"type": "chunk",   "text": "..."}  — natural language summary tokens
+      {"type": "done"}
+      {"type": "error",   "message": "..."}
+
+    Example questions:
+      "What is the fit score for all candidates in this role?"
+      "Which shortlisted candidates are most likely to accept an offer?"
+      "Show me join probability for Alice Johnson"
+      "Rank candidates by fit for session abc-123"
+
+    Models must be trained first via:
+      python backend/ml_train.py
+    Predictions return null until training is complete — the agent surfaces a
+    clear warning message rather than raising.
+    """
+    logger.info(f"Supervisor | Agent 6 — ML predict | question='{question[:80]}'")
+    return stream_ml_predictions(question, db, session_id=session_id)
