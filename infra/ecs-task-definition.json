@@ -17,18 +17,35 @@
       ],
       "environment": [
         { "name": "PYTHONUNBUFFERED", "value": "1" },
-        { "name": "APP_BASE_URL",     "value": "https://YOUR_DOMAIN" }
+        { "name": "APP_BASE_URL",     "value": "https://YOUR_DOMAIN" },
+        { "name": "SMTP_HOST",        "value": "localhost" },
+        { "name": "SMTP_PORT",        "value": "1025" },
+        { "name": "SMTP_USER",        "value": "" },
+        { "name": "SMTP_PASSWORD",    "value": "" },
+        { "name": "SMTP_FROM",        "value": "noreply@invictushiring.co" },
+        { "name": "SMTP_USE_TLS",     "value": "false" }
       ],
       "secrets": [
-        { "name": "OPENAI_API_KEY",    "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/openai_api_key" },
-        { "name": "DATABASE_URL",      "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/database_url" },
-        { "name": "ENCRYPTION_KEY",    "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/encryption_key" },
-        { "name": "JWT_SECRET_KEY",    "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/jwt_secret_key" }
+        { "name": "OPENAI_API_KEY",  "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/openai_api_key" },
+        { "name": "DATABASE_URL",    "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/database_url" },
+        { "name": "REDIS_URL",       "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/redis_url" },
+        { "name": "ENCRYPTION_KEY",  "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/encryption_key" },
+        { "name": "JWT_SECRET_KEY",  "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:invictus/jwt_secret_key" }
       ],
       "mountPoints": [
         {
           "sourceVolume": "cv-uploads",
           "containerPath": "/app/backend/cv_uploads",
+          "readOnly": false
+        },
+        {
+          "sourceVolume": "indeed-feeds",
+          "containerPath": "/app/backend/indeed_feeds",
+          "readOnly": false
+        },
+        {
+          "sourceVolume": "job-pages",
+          "containerPath": "/app/backend/job_pages",
           "readOnly": false
         }
       ],
@@ -66,6 +83,23 @@
           "awslogs-stream-prefix": "frontend"
         }
       }
+    },
+    {
+      "name": "mailpit",
+      "image": "axllent/mailpit:latest",
+      "essential": false,
+      "portMappings": [
+        { "containerPort": 1025, "protocol": "tcp" },
+        { "containerPort": 8025, "protocol": "tcp" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group":         "/ecs/invictus-backend",
+          "awslogs-region":        "REGION",
+          "awslogs-stream-prefix": "mailpit"
+        }
+      }
     }
   ],
 
@@ -75,6 +109,22 @@
       "efsVolumeConfiguration": {
         "fileSystemId": "fs-XXXXXXXXX",
         "rootDirectory": "/cv_uploads",
+        "transitEncryption": "ENABLED"
+      }
+    },
+    {
+      "name": "indeed-feeds",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-XXXXXXXXX",
+        "rootDirectory": "/indeed_feeds",
+        "transitEncryption": "ENABLED"
+      }
+    },
+    {
+      "name": "job-pages",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-XXXXXXXXX",
+        "rootDirectory": "/job_pages",
         "transitEncryption": "ENABLED"
       }
     }

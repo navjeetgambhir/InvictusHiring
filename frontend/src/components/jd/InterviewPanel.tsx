@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   Calendar, ChevronDown, ChevronUp, Download, Loader2,
-  Mail, MessageSquare, Sparkles, CheckCircle2,
+  Mail, MessageSquare, Sparkles, CheckCircle2, X, RotateCcw, Star, ClipboardList,
 } from 'lucide-react'
 import { PanelWrapper } from './PanelWrapper'
 import { getToken } from '@/api/auth'
@@ -10,10 +10,15 @@ import {
   generateInvitation,
   approveAndSendEmail,
   scheduleInterview,
+  cancelInterview,
+  rescheduleInterview,
+  submitFeedback,
   icsDownloadUrl,
   type InterviewRecord,
   type InterviewInvitation,
   type InterviewFormat,
+  type FeedbackRecommendation,
+  type InterviewFeedback,
 } from '@/api/candidates'
 import { downloadBlob } from '@/lib/download'
 
@@ -28,21 +33,32 @@ const FORMAT_LABELS: Record<InterviewFormat, string> = {
   in_person: 'In Person',
 }
 
-type BadgeState = 'scheduled' | 'invite_sent' | 'invite_approved' | 'awaiting_approval' | 'shortlisted'
+type BadgeState = 'scheduled' | 'completed' | 'cancelled' | 'invite_sent' | 'invite_approved' | 'awaiting_approval' | 'shortlisted'
 
-function statusBadge(scheduled: boolean, invitation: InterviewInvitation | null): BadgeState {
-  if (scheduled) return 'scheduled'
+function statusBadge(status: string | null, invitation: InterviewInvitation | null): BadgeState {
+  if (status === 'completed') return 'completed'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'scheduled') return 'scheduled'
   if (!invitation) return 'shortlisted'
   if (invitation.email_approved_at) return invitation.email_sent_at ? 'invite_sent' : 'invite_approved'
   return 'awaiting_approval'
 }
 
 const BADGE_STYLES: Record<BadgeState, { label: string; className: string }> = {
-  scheduled:        { label: 'Scheduled',        className: 'text-violet-600 bg-violet-50 border-violet-200' },
-  invite_sent:      { label: 'Invite sent',       className: 'text-green-700 bg-green-50 border-green-200'   },
-  invite_approved:  { label: 'Invite approved',   className: 'text-green-700 bg-green-50 border-green-200'   },
-  awaiting_approval:{ label: 'Awaiting approval', className: 'text-amber-700 bg-amber-50 border-amber-200'   },
+  scheduled:        { label: 'Scheduled',        className: 'text-violet-600 bg-violet-50 border-violet-200'  },
+  completed:        { label: 'Completed',         className: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+  cancelled:        { label: 'Cancelled',         className: 'text-rose-600 bg-rose-50 border-rose-200'       },
+  invite_sent:      { label: 'Invite sent',       className: 'text-green-700 bg-green-50 border-green-200'    },
+  invite_approved:  { label: 'Invite approved',   className: 'text-green-700 bg-green-50 border-green-200'    },
+  awaiting_approval:{ label: 'Awaiting approval', className: 'text-amber-700 bg-amber-50 border-amber-200'    },
   shortlisted:      { label: 'Shortlisted',       className: 'text-stone-400 bg-transparent border-transparent' },
+}
+
+const REC_LABELS: Record<FeedbackRecommendation, { label: string; className: string }> = {
+  strong_hire:    { label: 'Strong Hire',    className: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+  hire:           { label: 'Hire',           className: 'text-green-700 bg-green-50 border-green-200'      },
+  no_hire:        { label: 'No Hire',        className: 'text-rose-600 bg-rose-50 border-rose-200'         },
+  strong_no_hire: { label: 'Strong No Hire', className: 'text-red-700 bg-red-50 border-red-200'            },
 }
 
 function QuestionList({ questions }: { questions: string[] }) {
@@ -181,10 +197,12 @@ function ScheduleForm({
   applicationId,
   token,
   onScheduled,
+  rescheduleApi,
 }: {
   applicationId: string
   token: string
   onScheduled: (result: { interview_scheduled_at: string; interview_format: InterviewFormat; interview_location: string | null }) => void
+  rescheduleApi?: typeof rescheduleInterview
 }) {
   const [scheduledAt, setScheduledAt] = useState('')
   const [format, setFormat] = useState<InterviewFormat>('video')
@@ -199,7 +217,8 @@ function ScheduleForm({
     setSaving(true)
     setError(null)
     try {
-      const result = await scheduleInterview(applicationId, {
+      const api = rescheduleApi ?? scheduleInterview
+      const result = await api(applicationId, {
         scheduled_at: new Date(scheduledAt).toISOString(),
         format,
         location,
@@ -285,6 +304,181 @@ function ScheduleForm({
   )
 }
 
+function StarRating({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  return (
+    <div className="flex gap-1">
+      {[1, 2, 3, 4, 5].map(n => (
+        <button key={n} type="button" onClick={() => onChange(n)}>
+          <Star className={`h-4 w-4 ${n <= value ? 'text-amber-400 fill-amber-400' : 'text-stone-300'}`} />
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function FeedbackForm({
+  applicationId,
+  token,
+  existingFeedback,
+  onSubmitted,
+}: {
+  applicationId: string
+  token: string
+  existingFeedback: InterviewFeedback[]
+  onSubmitted: (fb: InterviewFeedback) => void
+}) {
+  const [open, setOpen] = useState(existingFeedback.length === 0)
+  const [rating, setRating] = useState(0)
+  const [techScore, setTechScore] = useState(0)
+  const [commScore, setCommScore] = useState(0)
+  const [cultureScore, setCultureScore] = useState(0)
+  const [strengths, setStrengths] = useState('')
+  const [concerns, setConcerns] = useState('')
+  const [recommendation, setRecommendation] = useState<FeedbackRecommendation>('hire')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (rating === 0) { setError('Please set an overall rating'); return }
+    setSaving(true)
+    setError(null)
+    try {
+      const fb = await submitFeedback(applicationId, {
+        round: existingFeedback.length + 1,
+        overall_rating: rating,
+        technical_score: techScore || null,
+        communication_score: commScore || null,
+        cultural_fit_score: cultureScore || null,
+        strengths: strengths || undefined,
+        concerns: concerns || undefined,
+        recommendation,
+      }, token)
+      onSubmitted(fb)
+      setOpen(false)
+      setRating(0); setTechScore(0); setCommScore(0); setCultureScore(0)
+      setStrengths(''); setConcerns('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {existingFeedback.map(fb => {
+        const rec = REC_LABELS[fb.recommendation]
+        return (
+          <div key={fb.id} className="rounded-lg border border-stone-200 bg-white p-3 flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-stone-700">Round {fb.round} — {fb.submitted_by}</span>
+              <span className={`text-[10px] font-medium border px-2 py-0.5 rounded-full ${rec.className}`}>{rec.label}</span>
+            </div>
+            <div className="flex gap-1">
+              {[1,2,3,4,5].map(n => <Star key={n} className={`h-3.5 w-3.5 ${n <= fb.overall_rating ? 'text-amber-400 fill-amber-400' : 'text-stone-200'}`} />)}
+            </div>
+            {fb.strengths && <p className="text-xs text-stone-600"><span className="font-medium text-emerald-700">+ </span>{fb.strengths}</p>}
+            {fb.concerns && <p className="text-xs text-stone-600"><span className="font-medium text-rose-600">− </span>{fb.concerns}</p>}
+          </div>
+        )
+      })}
+
+      {!open ? (
+        <button
+          onClick={() => setOpen(true)}
+          className="flex items-center gap-1.5 self-start text-xs text-violet-600 hover:text-violet-800 font-medium transition-colors"
+        >
+          <ClipboardList className="h-3.5 w-3.5" /> Add feedback
+        </button>
+      ) : (
+        <form onSubmit={handleSubmit} className="rounded-lg border border-stone-200 bg-white p-3 flex flex-col gap-3">
+          <p className="text-xs font-semibold text-stone-700 flex items-center gap-1.5">
+            <ClipboardList className="h-3.5 w-3.5 text-violet-500" /> Interview Feedback
+          </p>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-stone-500">Overall Rating *</label>
+            <StarRating value={rating} onChange={setRating} />
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { label: 'Technical', value: techScore, setter: setTechScore },
+              { label: 'Communication', value: commScore, setter: setCommScore },
+              { label: 'Culture Fit', value: cultureScore, setter: setCultureScore },
+            ].map(({ label, value, setter }) => (
+              <div key={label} className="flex flex-col gap-1">
+                <label className="text-[10px] text-stone-400">{label}</label>
+                <StarRating value={value} onChange={setter} />
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-stone-500">Recommendation *</label>
+            <select
+              value={recommendation}
+              onChange={e => setRecommendation(e.target.value as FeedbackRecommendation)}
+              className="rounded border border-stone-200 px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-violet-400"
+            >
+              <option value="strong_hire">Strong Hire</option>
+              <option value="hire">Hire</option>
+              <option value="no_hire">No Hire</option>
+              <option value="strong_no_hire">Strong No Hire</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-stone-500">Strengths</label>
+              <textarea
+                value={strengths}
+                onChange={e => setStrengths(e.target.value)}
+                rows={2}
+                placeholder="What stood out positively?"
+                className="rounded border border-stone-200 px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-violet-400"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-stone-500">Concerns</label>
+              <textarea
+                value={concerns}
+                onChange={e => setConcerns(e.target.value)}
+                rows={2}
+                placeholder="Any reservations?"
+                className="rounded border border-stone-200 px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-violet-400"
+              />
+            </div>
+          </div>
+
+          {error && <p className="text-xs text-red-500">{error}</p>}
+
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50 transition-colors"
+            >
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+              Submit Feedback
+            </button>
+            {existingFeedback.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="text-xs text-stone-400 hover:text-stone-600 transition-colors px-2"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+      )}
+    </div>
+  )
+}
+
 function InterviewRow({ record, token, onUpdated }: {
   record: InterviewRecord
   token: string
@@ -294,9 +488,24 @@ function InterviewRow({ record, token, onUpdated }: {
   const [generating, setGenerating] = useState(false)
   const [invitation, setInvitation] = useState<InterviewInvitation | null>(record.invitation)
   const [genError, setGenError] = useState<string | null>(null)
+  const [cancelling, setCancelling] = useState(false)
+  const [showReschedule, setShowReschedule] = useState(false)
+  const [feedback, setFeedback] = useState<InterviewFeedback[]>([])
 
-  const scheduled = !!record.interview_scheduled_at
-  const badge = BADGE_STYLES[statusBadge(scheduled, invitation)]
+  const scheduled = record.interview_status === 'scheduled'
+  const completed = record.interview_status === 'completed'
+  const cancelled = record.interview_status === 'cancelled'
+  const badge = BADGE_STYLES[statusBadge(record.interview_status, invitation)]
+
+  async function handleCancel() {
+    if (!confirm('Cancel this interview?')) return
+    setCancelling(true)
+    try {
+      await cancelInterview(record.id, token)
+      onUpdated({ id: record.id, interview_status: 'cancelled', interview_scheduled_at: null, interview_format: null, interview_location: null })
+    } catch { /* ignore */ }
+    finally { setCancelling(false) }
+  }
 
   const scheduledDate = record.interview_scheduled_at
     ? new Date(record.interview_scheduled_at).toLocaleString('en-GB', {
@@ -320,6 +529,7 @@ function InterviewRow({ record, token, onUpdated }: {
   }
 
   function handleScheduled(result: { interview_scheduled_at: string; interview_format: InterviewFormat; interview_location: string | null }) {
+    setShowReschedule(false)
     onUpdated({
       id: record.id,
       interview_status: 'scheduled',
@@ -377,25 +587,72 @@ function InterviewRow({ record, token, onUpdated }: {
             <p className="text-xs text-stone-600 leading-relaxed italic">{record.screening_summary}</p>
           )}
 
-          {scheduled && scheduledDate && (
-            <div className="flex items-start justify-between rounded-lg border border-violet-200 bg-violet-50 p-3">
+          {(scheduled || completed || cancelled) && scheduledDate && (
+            <div className={`flex items-start justify-between rounded-lg border p-3 ${completed ? 'border-emerald-200 bg-emerald-50' : cancelled ? 'border-rose-200 bg-rose-50' : 'border-violet-200 bg-violet-50'}`}>
               <div className="flex flex-col gap-0.5">
-                <p className="text-xs font-semibold text-violet-800">Interview Confirmed</p>
-                <p className="text-xs text-violet-700">{scheduledDate}</p>
+                <p className={`text-xs font-semibold ${completed ? 'text-emerald-800' : cancelled ? 'text-rose-700' : 'text-violet-800'}`}>
+                  {completed ? 'Interview Completed' : cancelled ? 'Interview Cancelled' : 'Interview Confirmed'}
+                </p>
+                <p className={`text-xs ${completed ? 'text-emerald-700' : cancelled ? 'text-rose-600' : 'text-violet-700'}`}>{scheduledDate}</p>
                 {record.interview_format && (
-                  <p className="text-xs text-violet-600">{FORMAT_LABELS[record.interview_format]}</p>
+                  <p className="text-xs text-stone-600">{FORMAT_LABELS[record.interview_format]}</p>
                 )}
                 {record.interview_location && (
                   <p className="text-xs text-stone-600">{record.interview_location}</p>
                 )}
               </div>
-              <button
-                onClick={e => { e.stopPropagation(); downloadBlob(icsDownloadUrl(record.id), `interview_${record.name.replace(/\s+/g, '_').toLowerCase()}.ics`, token) }}
-                className="flex items-center gap-1 text-xs text-violet-700 hover:underline shrink-0 ml-3"
-              >
-                <Download className="h-3.5 w-3.5" /> .ics
-              </button>
+              <div className="flex items-center gap-2 shrink-0 ml-3">
+                {scheduled && (
+                  <>
+                    <button
+                      onClick={e => { e.stopPropagation(); downloadBlob(icsDownloadUrl(record.id), `interview_${record.name.replace(/\s+/g, '_').toLowerCase()}.ics`, token) }}
+                      className="flex items-center gap-1 text-xs text-violet-700 hover:underline"
+                    >
+                      <Download className="h-3.5 w-3.5" /> .ics
+                    </button>
+                    <button
+                      onClick={e => { e.stopPropagation(); setShowReschedule(r => !r) }}
+                      className="flex items-center gap-1 text-xs text-stone-500 hover:text-violet-600 transition-colors"
+                    >
+                      <RotateCcw className="h-3 w-3" /> Reschedule
+                    </button>
+                    <button
+                      onClick={e => { e.stopPropagation(); handleCancel() }}
+                      disabled={cancelling}
+                      className="flex items-center gap-1 text-xs text-stone-400 hover:text-rose-500 transition-colors"
+                    >
+                      {cancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />} Cancel
+                    </button>
+                  </>
+                )}
+                {cancelled && (
+                  <button
+                    onClick={e => { e.stopPropagation(); setShowReschedule(r => !r) }}
+                    className="flex items-center gap-1 text-xs text-violet-600 hover:text-violet-800 font-medium transition-colors"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" /> Reschedule
+                  </button>
+                )}
+              </div>
             </div>
+          )}
+
+          {showReschedule && (
+            <ScheduleForm
+              applicationId={record.id}
+              token={token}
+              onScheduled={handleScheduled}
+              rescheduleApi={rescheduleInterview}
+            />
+          )}
+
+          {(completed || scheduled) && (
+            <FeedbackForm
+              applicationId={record.id}
+              token={token}
+              existingFeedback={feedback}
+              onSubmitted={fb => setFeedback(prev => [...prev, fb])}
+            />
           )}
 
           {invitation && (
@@ -444,7 +701,7 @@ function InterviewRow({ record, token, onUpdated }: {
             </button>
           )}
 
-          {!scheduled && (
+          {!scheduled && !cancelled && !completed && (
             <ScheduleForm
               applicationId={record.id}
               token={token}

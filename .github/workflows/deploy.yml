@@ -1,0 +1,111 @@
+name: Deploy to AWS ECS
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGION: eu-west-2
+  ECR_BACKEND: invictus-backend
+  ECR_FRONTEND: invictus-frontend
+  ECS_CLUSTER: invictus-cluster
+  ECS_SERVICE: invictus-service
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv pip install --system $(python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(' '.join(d['project']['dependencies']))")
+
+      - name: Run tests
+        env:
+          OPENAI_API_KEY: sk-fake-for-tests
+          DATABASE_URL: postgresql+asyncpg://user:pass@localhost/db
+          REDIS_URL: redis://localhost:6379/0
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          JWT_SECRET_KEY: test-secret
+        run: PYTHONPATH=backend .venv/bin/pytest -v --tb=short || python -m pytest -v --tb=short
+        working-directory: ${{ github.workspace }}
+
+  deploy:
+    name: Build & deploy
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Log in to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push backend
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_BACKEND:$IMAGE_TAG \
+                       -t $ECR_REGISTRY/$ECR_BACKEND:latest \
+                       -f backend/Dockerfile .
+          docker push $ECR_REGISTRY/$ECR_BACKEND:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_BACKEND:latest
+
+      - name: Build & push frontend
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_FRONTEND:$IMAGE_TAG \
+                       -t $ECR_REGISTRY/$ECR_FRONTEND:latest \
+                       ./frontend
+          docker push $ECR_REGISTRY/$ECR_FRONTEND:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_FRONTEND:latest
+
+      - name: Register new task definition
+        env:
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          TASK_ARN=$(sed \
+            -e "s/ACCOUNT_ID/${ACCOUNT_ID}/g" \
+            -e "s/REGION/${{ env.REGION }}/g" \
+            infra/ecs-task-definition.json \
+            | aws ecs register-task-definition \
+                --cli-input-json file:///dev/stdin \
+                --region ${{ env.REGION }} \
+                --query "taskDefinition.taskDefinitionArn" \
+                --output text)
+          echo "TASK_ARN=$TASK_ARN" >> $GITHUB_ENV
+
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --task-definition ${{ env.TASK_ARN }} \
+            --region ${{ env.REGION }} \
+            --force-new-deployment
+
+      - name: Wait for service to stabilise
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --region ${{ env.REGION }}

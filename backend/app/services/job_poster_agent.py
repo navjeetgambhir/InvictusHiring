@@ -28,8 +28,6 @@ from app.services.platforms.google_jobs import post_to_google_jobs
 
 _client = wrap_openai(AsyncOpenAI(api_key=settings.openai_api_key))
 
-POSTER_PROMPT_VERSION = "poster-v1"
-
 _PLATFORMS = [
     {
         "id": "linkedin",

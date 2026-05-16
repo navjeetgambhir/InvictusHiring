@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, SmallInteger, String, Text, DateTime, ForeignKey, JSON
@@ -30,7 +31,7 @@ class AgentRun(Base):
     output_tokens: Mapped[int | None] = mapped_column(nullable=True)
 
     # Agent-specific eval metrics (flexible JSON)
-    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
@@ -69,6 +70,23 @@ class JobPosting(Base):
     request: Mapped["JDRequest"] = relationship("JDRequest", back_populates="postings")
 
 
+class MlPrediction(Base):
+    """One record per candidate per ML prediction query — persists fit/join scores and SHAP factors."""
+    __tablename__ = "ml_predictions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("candidate_applications.id", ondelete="CASCADE"), nullable=True)
+    session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    candidate_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    job_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    prediction_type: Mapped[str] = mapped_column(String(10))            # fit | join | both
+    fit_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    join_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    fit_explanation: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
+    join_explanation: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class PastJD(Base):
     """Stores historical approved JDs used for RAG retrieval."""
     __tablename__ = "past_jds"
@@ -77,7 +95,7 @@ class PastJD(Base):
     title: Mapped[str] = mapped_column(String(255))
     department: Mapped[str] = mapped_column(String(255))
     content: Mapped[str] = mapped_column(Text)  # full JD text
-    embedding: Mapped[list] = mapped_column(Vector(1536))  # text-embedding-3-small dims
+    embedding: Mapped[list[float]] = mapped_column(Vector(1536))  # text-embedding-3-small dims
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -94,8 +112,8 @@ class JDRequest(Base):
     department: Mapped[str] = mapped_column(String(255))
     location: Mapped[str] = mapped_column(String(255))
     salary_band: Mapped[str] = mapped_column(String(100))
-    required_skills: Mapped[list] = mapped_column(JSON)
-    nice_to_have_skills: Mapped[list] = mapped_column(JSON)
+    required_skills: Mapped[list[str]] = mapped_column(JSON)
+    nice_to_have_skills: Mapped[list[str]] = mapped_column(JSON)
     company_description: Mapped[str] = mapped_column(Text)
     additional_context: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -191,6 +209,7 @@ class CandidateApplication(Base):
 
     request: Mapped["JDRequest"] = relationship("JDRequest", back_populates="applications")
     invitations: Mapped[list["InterviewInvitation"]] = relationship("InterviewInvitation", back_populates="application", order_by="InterviewInvitation.created_at")
+    feedback: Mapped[list["InterviewFeedback"]] = relationship("InterviewFeedback", back_populates="application", order_by="InterviewFeedback.created_at")
 
 
 class InterviewInvitation(Base):
@@ -203,7 +222,7 @@ class InterviewInvitation(Base):
     # AI-generated draft (immutable after creation)
     email_subject: Mapped[str] = mapped_column(String(500))
     email_body: Mapped[str] = mapped_column(Text)
-    interview_questions: Mapped[list] = mapped_column(JSON)
+    interview_questions: Mapped[list[str]] = mapped_column(JSON)
 
     # HR-approved final version (set when HR clicks Approve & Send)
     final_recipient: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -216,3 +235,23 @@ class InterviewInvitation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     application: Mapped["CandidateApplication"] = relationship("CandidateApplication", back_populates="invitations")
+
+
+class InterviewFeedback(Base):
+    """Post-interview feedback submitted by HR/HM after the interview is conducted."""
+    __tablename__ = "interview_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("candidate_applications.id", ondelete="CASCADE"), index=True)
+    submitted_by: Mapped[str] = mapped_column(String(255))                          # user name or email
+    round: Mapped[int] = mapped_column(SmallInteger, default=1)                     # interview round number
+    overall_rating: Mapped[int] = mapped_column(SmallInteger)                       # 1–5
+    technical_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    communication_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    cultural_fit_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    strengths: Mapped[str | None] = mapped_column(Text, nullable=True)
+    concerns: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recommendation: Mapped[str] = mapped_column(String(20))                         # strong_hire | hire | no_hire | strong_no_hire
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    application: Mapped["CandidateApplication"] = relationship("CandidateApplication", back_populates="feedback")

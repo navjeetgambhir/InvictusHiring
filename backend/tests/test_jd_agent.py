@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 def _make_stream_chunk(content: str | None):
     chunk = MagicMock()
+    chunk.usage = None
     chunk.choices = [MagicMock()]
     chunk.choices[0].delta.content = content
     return chunk
@@ -186,7 +187,10 @@ async def test_stream_revision_includes_feedback_in_messages():
 async def test_stream_chat_reply_includes_user_message():
     chunks = [_make_stream_chunk("Updated")]
 
-    with patch("app.services.jd_agent._client") as mock_client:
+    with (
+        patch("app.services.jd_agent._client") as mock_client,
+        patch("app.services.jd_agent.is_on_topic", AsyncMock(return_value=True)),
+    ):
         mock_client.chat.completions.create = AsyncMock(return_value=_async_iter(chunks))
 
         from app.services.jd_agent import stream_chat_reply

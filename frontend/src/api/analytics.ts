@@ -86,18 +86,6 @@ export async function streamMlQuery(
   }
 }
 
-// kept for backward compat
-export async function classifyIntent(message: string): Promise<'jd_draft' | 'analytics' | 'other'> {
-  const res = await fetch(`${BASE}/classify`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ message }),
-  })
-  if (!res.ok) return 'other'
-  const data = await res.json()
-  return data.intent ?? 'other'
-}
-
 export async function streamAnalyticsQuery(
   question: string,
   onEvent: (event: AnalyticsEvent) => void,

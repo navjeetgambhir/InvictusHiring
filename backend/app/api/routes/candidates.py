@@ -2,8 +2,9 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from loguru import logger
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, CurrentUser
+from app.core.limiter import limiter
 from app.db.models import CandidateApplication, JDDraft, JDRequest
 from app.db.queries import get_request_or_404
 from app.services.cv_screener import CV_DIR, _extract_sync
@@ -42,7 +44,7 @@ async def _count_applications(req_id: uuid.UUID, db: AsyncSession) -> int:
     return result.scalar_one()
 
 
-def _job_row_to_dict(req: JDRequest, draft: JDDraft | None, application_count: int = 0) -> dict:
+def _job_row_to_dict(req: JDRequest, draft: JDDraft | None, application_count: int = 0) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     accepting = _is_accepting(req, application_count)
     return {
@@ -145,7 +147,9 @@ async def get_job(session_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/apply/{session_id}", status_code=201)
+@limiter.limit("5/hour")
 async def apply_for_job(
+    request: Request,
     session_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),

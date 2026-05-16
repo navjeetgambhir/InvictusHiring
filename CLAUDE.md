@@ -158,6 +158,16 @@ Every OpenAI call fires `agent_telemetry.fire_run()` as a background task — wr
 - **Chat history** — `conversation:{session_id}` (list, 24-hour TTL). On cache miss, falls back to Postgres `chat_messages`. `push_message` / `get_history` fail silently with a log warning — Redis is optional.
 - **Active session** — `active_session:{user_id}` (string, 30-day TTL). Persists the last JD session the user had open so it can be restored on page refresh. Managed via `PUT/GET/DELETE /api/auth/active-session`; the frontend calls these on session change, dashboard nav, and logout. Replaces the previous localStorage approach.
 
+### Rate Limiting
+
+`app/core/limiter.py` exposes a `slowapi` `Limiter` instance keyed on `get_remote_address`. Applied per-route via the `@limiter.limit(...)` decorator. No global limit — individual routes opt in.
+
+### Prompt Injection Guardrail
+
+`app/core/prompt_guard.py` provides two functions used before passing untrusted user text to any LLM:
+- `sanitise_user_content(text)` — regex-strips known injection patterns (`ignore previous instructions`, `jailbreak`, `[INST]`, `<|system|>`, etc.) and logs a warning when anything is redacted.
+- `wrap_user_content(text)` — calls `sanitise_user_content` then wraps the result in `=== BEGIN USER CONTENT ===` / `=== END USER CONTENT ===` boundary markers so the model treats it as data, not instructions.
+
 ### SQL Safety (Analytics Agent)
 
 `app/services/sql_ast_validator.py` uses `sqlglot` to parse and walk the AST before executing any NLP-generated SQL. Blocks: non-SELECT statements, forbidden DML/DDL nodes, dangerous PostgreSQL functions (`pg_read_file`, `dblink`, etc.), unknown tables, and stacked queries. Belt-and-suspenders regex runs before the AST parse — trailing semicolons are stripped before the regex check to avoid false positives on valid single-statement queries.
@@ -231,6 +241,12 @@ CandidateApplication  — name, email, phone, cover_letter (text), cover_letter_
                         interview_rounds, days_to_respond
 InterviewInvitation   — application_id, AI-generated email_subject/body/questions,
                         HR-approved final_recipient/subject/body, email_sent_at
+MlPrediction          — application_id, session_id, candidate_name, job_title,
+                        prediction_type (fit|join|both), fit_score, join_score,
+                        fit_explanation (JSONB top-5 SHAP), join_explanation (JSONB top-5 SHAP)
+InterviewFeedback     — application_id, submitted_by, round, overall_rating (1–5),
+                        technical_score, communication_score, cultural_fit_score,
+                        strengths, concerns, recommendation (strong_hire|hire|no_hire|strong_no_hire)
 ```
 
 ## Migrations
@@ -254,12 +270,16 @@ Migration files in `backend/migrations/`:
 - `005_ml_outcome_fields.sql` — adds outcome/offer/interview_rounds columns to `candidate_applications`
 - `006_cover_letter_file.sql` — adds `cover_letter_filename` column to `candidate_applications`
 - `007_job_expiry.sql` — adds `expires_at`, `max_applications`, `published_at` to `jd_requests`
+- `008_prompt_versions.sql` — adds `prompt_version` to `jd_drafts` and `screening_prompt_version` to `candidate_applications`
+- `009_ml_predictions.sql` — creates `ml_predictions` table (fit/join scores + SHAP explanations per candidate per prediction run)
+- `010_interview_feedback.sql` — creates `interview_feedback` table (per-round ratings: technical, communication, cultural fit, recommendation)
 
 ## Key Architectural Conventions
 
 - **All AI responses stream** — `jd_agent.py`, `job_poster_agent.py` use `async for chunk in stream`. The analytics agent streams NDJSON.
 - **Telemetry is always fire-and-forget** — `asyncio.create_task(fire_run(...))` in every agent; never awaited inline.
-- **RAG logs retrieval scores** — `rag.py` logs title + cosine similarity for every retrieved PastJD.
+- **RAG logs retrieval scores** — `rag.py` logs title + cosine similarity for every retrieved PastJD. `retrieve_similar_jds` is decorated with `@traceable(run_type="retriever")` so it appears as a child span inside `jd_drafter.initial_draft` in LangSmith.
+- **Analytics live schema introspection** — `analytics_agent.py` queries `information_schema.columns` once per process lifetime (`_fetch_live_schema`) and caches the result in `_schema_cache`. Excludes `agent_runs` and `past_jds` (internal/RAG tables not relevant to HR analytics). Refreshes automatically on process restart after migrations.
 - **Supervisor falls back gracefully** — returns intent `other` on error or confidence < 0.5.
 - **Frontend state machine** — `useJDSession.ts` drives the UI through `idle → drafting → pending_approval → approved → publishing → published`. Published JDs can be reverted via "Revise JD & Republish" button.
 - **Session context flows to all agents** — `useJDSession` tracks `sessionTitle` and `sessionDepartment`; these are passed to the supervisor routing and analytics/ML endpoints on every request.

@@ -24,7 +24,7 @@ Example queries
 import json
 import time
 import uuid
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -32,12 +32,34 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.models import CandidateApplication, JDRequest
+from app.core.database import AsyncSessionLocal
+from app.db.models import CandidateApplication, JDRequest, MlPrediction
 from app.services.ml_predictor import predict_fit, predict_join, explain_fit, explain_join
 from app.services.agent_telemetry import fire_run
 import asyncio
 
 _client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+
+async def _save_predictions(results: list[dict], prediction_type: str) -> None:
+    try:
+        async with AsyncSessionLocal() as db:
+            for r in results:
+                db.add(MlPrediction(
+                    application_id=uuid.UUID(r["application_id"]) if r.get("application_id") else None,
+                    session_id=uuid.UUID(r["session_id"]) if r.get("session_id") else None,
+                    candidate_name=r.get("candidate_name"),
+                    job_title=r.get("job_title"),
+                    prediction_type=prediction_type,
+                    fit_score=r.get("fit_probability"),
+                    join_score=r.get("join_probability"),
+                    fit_explanation=r.get("fit_explanation"),
+                    join_explanation=r.get("join_explanation"),
+                ))
+            await db.commit()
+        logger.info(f"Saved {len(results)} ML predictions to DB")
+    except Exception as exc:
+        logger.warning(f"Failed to save ML predictions: {exc}")
 
 ML_AGENT_PROMPT_VERSION = "ml-agent-v1"
 
@@ -67,7 +89,7 @@ Given a list of ML prediction results for candidates — including fit score, jo
 - Maximum 5 sentences"""
 
 
-async def _parse_query(question: str) -> dict:
+async def _parse_query(question: str) -> dict[str, Any]:
     """Use OpenAI to extract structured intent from the user's natural language question."""
     response = await _client.chat.completions.create(
         model="gpt-4o-mini",
@@ -189,6 +211,7 @@ async def stream_ml_predictions(
 
         # ── 5. Emit structured results first (UI can render immediately) ───────
         yield json.dumps({"type": "results", "data": results}) + "\n"
+        asyncio.create_task(_save_predictions(results, prediction_type))
 
         # ── 6. Generate and stream a natural language summary ─────────────────
         def _top_factors_text(explanation: list[dict]) -> str:

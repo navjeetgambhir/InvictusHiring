@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -88,7 +88,7 @@ _EXTRACT_TOOL = {
 
 
 @traceable(name="jd_drafter.extract_requirements", run_type="chain", tags=["agent1", "jd_drafter"])
-async def extract_requirements(text: str, session_id: str | None = None) -> dict:
+async def extract_requirements(text: str, session_id: str | None = None) -> dict[str, Any]:
     """Use OpenAI function calling to extract structured fields from free-text requirements."""
     logger.info(f"Extracting requirements from free text ({len(text)} chars)")
     t0 = time.perf_counter()
@@ -130,7 +130,7 @@ async def extract_requirements(text: str, session_id: str | None = None) -> dict
     return extracted
 
 
-def _build_initial_prompt(requirements: dict, past_jds: list[dict]) -> str:
+def _build_initial_prompt(requirements: dict[str, Any], past_jds: list[dict[str, Any]]) -> str:
     rag_context = ""
     if past_jds:
         rag_context = "\n\n## Reference JDs from our archive (for tone & structure only)\n"
@@ -153,7 +153,7 @@ Draft the full JD now."""
 
 
 @traceable(name="jd_drafter.initial_draft", run_type="chain", tags=["agent1", "jd_drafter"])
-async def stream_initial_draft(requirements: dict, db: AsyncSession, session_id: str | None = None) -> AsyncIterator[str]:
+async def stream_initial_draft(requirements: dict[str, Any], db: AsyncSession, session_id: str | None = None) -> AsyncIterator[str]:
     """Stream the first JD draft using RAG context from past JDs."""
     logger.info(f"Drafting JD | title='{requirements.get('title')}' location='{requirements.get('location')}'")
     query = f"{requirements.get('title', '')} {requirements.get('department', '')} {' '.join(requirements.get('required_skills', []))}"
@@ -190,6 +190,14 @@ async def stream_initial_draft(requirements: dict, db: AsyncSession, session_id:
                 output_chars += len(delta)
                 yield delta
 
+        if past_jds:
+            seen = set()
+            unique = [jd for jd in past_jds if (key := (jd['title'], jd['department'])) not in seen and not seen.add(key)]
+            sources = ", ".join(f"[{jd['title']} — {jd['department']}]" for jd in unique)
+            attribution = f"\n\n---\n*Drafted with reference to archived JDs: {sources}*"
+            output_chars += len(attribution)
+            yield attribution
+
     except Exception as exc:
         status = "error"
         error_message = str(exc)
@@ -216,7 +224,7 @@ async def stream_initial_draft(requirements: dict, db: AsyncSession, session_id:
 async def stream_revision(
     feedback: str,
     current_draft: str,
-    history: list[dict],
+    history: list[dict[str, Any]],
     session_id: str | None = None,
     draft_version: int = 2,
 ) -> AsyncIterator[str]:
@@ -281,7 +289,7 @@ async def stream_revision(
 async def stream_chat_reply(
     user_message: str,
     current_draft: str,
-    history: list[dict],
+    history: list[dict[str, Any]],
     session_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream a response to a free-form chat message about the JD."""

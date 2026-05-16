@@ -1,6 +1,8 @@
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse, Response
@@ -11,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, AsyncSessionLocal
 from app.core.dependencies import get_current_user, CurrentUser
-from app.db.models import JDRequest, JDDraft, JobPosting
+from app.db.models import JDRequest, JDDraft, JobPosting, PastJD
 from app.services.supervisor import agent2_publish
+from app.services.rag import embed
 from app.services.platforms.indeed import FEED_DIR
 from app.services.platforms.google_jobs import JOBS_DIR
 
@@ -22,6 +25,18 @@ router = APIRouter(prefix="/jobs", tags=["Job Poster"])
 class PublishOptions(BaseModel):
     expires_at: datetime | None = None       # ISO8601 — null means no expiry
     max_applications: int | None = None      # null means unlimited
+
+
+async def _save_to_past_jds(title: str, department: str, content: str) -> None:
+    """Embed the published JD and upsert it into past_jds for future RAG retrieval."""
+    try:
+        embedding = await embed(content)
+        async with AsyncSessionLocal() as db:
+            db.add(PastJD(title=title, department=department, content=content, embedding=embedding))
+            await db.commit()
+        logger.info(f"Saved published JD to past_jds | title='{title}'")
+    except Exception as exc:
+        logger.warning(f"Failed to save JD to past_jds | title='{title}' error={exc}")
 
 
 async def _get_approved_request(session_id: uuid.UUID, db: AsyncSession) -> tuple[JDRequest, JDDraft]:
@@ -66,7 +81,7 @@ async def post_to_job_boards(
 
     import json
 
-    postings: dict[str, dict] = {}
+    postings: dict[str, dict[str, Any]] = {}
 
     async def generate():
         async for line in agent2_publish(draft.content, req.title, str(session_id)):
@@ -107,6 +122,7 @@ async def post_to_job_boards(
                     f"JD published | session_id={session_id} platforms={list(postings.keys())} "
                     f"expires_at={options.expires_at} max_applications={options.max_applications}"
                 )
+                asyncio.create_task(_save_to_past_jds(req.title, req.department, draft.content))
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
 

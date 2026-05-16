@@ -101,6 +101,33 @@ export interface SchedulePayload {
   duration_minutes?: number
 }
 
+export type FeedbackRecommendation = 'strong_hire' | 'hire' | 'no_hire' | 'strong_no_hire'
+
+export interface FeedbackPayload {
+  round?: number
+  overall_rating: number           // 1–5
+  technical_score?: number | null
+  communication_score?: number | null
+  cultural_fit_score?: number | null
+  strengths?: string
+  concerns?: string
+  recommendation: FeedbackRecommendation
+}
+
+export interface InterviewFeedback {
+  id: string
+  submitted_by: string
+  round: number
+  overall_rating: number
+  technical_score: number | null
+  communication_score: number | null
+  cultural_fit_score: number | null
+  strengths: string | null
+  concerns: string | null
+  recommendation: FeedbackRecommendation
+  created_at: string
+}
+
 export interface JobsPage {
   jobs: JobListing[]
   total: number
@@ -210,6 +237,59 @@ export async function fetchSessionInterviews(
 
 export function icsDownloadUrl(applicationId: string): string {
   return `${API}/interviews/ics/${applicationId}`
+}
+
+export async function cancelInterview(applicationId: string, token: string): Promise<void> {
+  const res = await fetch(`${API}/interviews/cancel/${applicationId}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail ?? 'Failed to cancel interview')
+  }
+}
+
+export async function rescheduleInterview(
+  applicationId: string,
+  payload: SchedulePayload,
+  token: string,
+): Promise<{ interview_scheduled_at: string; interview_format: InterviewFormat; interview_location: string | null }> {
+  const res = await fetch(`${API}/interviews/reschedule/${applicationId}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail ?? 'Failed to reschedule interview')
+  }
+  return res.json()
+}
+
+export async function submitFeedback(
+  applicationId: string,
+  payload: FeedbackPayload,
+  token: string,
+): Promise<InterviewFeedback> {
+  const res = await fetch(`${API}/interviews/feedback/${applicationId}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail ?? 'Failed to submit feedback')
+  }
+  return res.json()
+}
+
+export async function fetchFeedback(applicationId: string, token: string): Promise<InterviewFeedback[]> {
+  const res = await fetch(`${API}/interviews/feedback/${applicationId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error('Failed to load feedback')
+  return res.json()
 }
 
 export async function approveAndSendEmail(

@@ -3,8 +3,19 @@ import { cn } from '@/lib/utils'
 import { Bot, User, Info, DatabaseIcon, TrendingUp, TrendingDown } from 'lucide-react'
 import type { Message, MlResult, MlFactor } from '@/hooks/useJDSession'
 
+// Hoisted to module scope — stable reference, no re-allocation per render.
+// Matches *italic* but not **bold**: negative lookahead/lookbehind prevents
+// matching the inner *word* of **word**.
+function renderInline(line: string) {
+  const parts = line.split(/((?<!\*)\*(?!\*)[^*]+(?<!\*)\*(?!\*))/)
+  return parts.map((part, j) =>
+    part.startsWith('*') && part.endsWith('*') && part.length > 2
+      ? <em key={j} className="text-stone-500 not-italic text-sm">{part.slice(1, -1)}</em>
+      : part
+  )
+}
+
 function MarkdownText({ text }: { text: string }) {
-  // Minimal inline markdown: **bold**, bullet lines, headings
   const lines = text.split('\n')
   return (
     <div className="flex flex-col gap-0.5">
@@ -17,8 +28,9 @@ function MarkdownText({ text }: { text: string }) {
         if (line.startsWith('**') && line.endsWith('**')) {
           return <p key={i} className="font-semibold text-stone-800">{line.slice(2, -2)}</p>
         }
+        if (line.trim() === '---') return <hr key={i} className="border-stone-200 my-2" />
         if (line === '') return <div key={i} className="h-2" />
-        return <p key={i}>{line}</p>
+        return <p key={i}>{renderInline(line)}</p>
       })}
     </div>
   )

@@ -62,8 +62,8 @@ async def test_freetext_draft_streams_content(client, db_session):
     }
 
     with (
-        patch("app.api.routes.jd.extract_requirements", AsyncMock(return_value=extracted)),
-        patch("app.api.routes.jd.stream_initial_draft", side_effect=_fake_stream),
+        patch("app.api.routes.jd.agent1_extract", AsyncMock(return_value=extracted)),
+        patch("app.api.routes.jd.agent1_draft", side_effect=_fake_stream),
     ):
         response = await client.post("/api/jd/draft-freetext", json={
             "submitted_by": "hm@example.com",
@@ -93,7 +93,7 @@ async def test_create_draft_streams_content(client, valid_requirements, db_sessi
     db_session.flush = AsyncMock()
     db_session.commit = AsyncMock()
 
-    with patch("app.api.routes.jd.stream_initial_draft", side_effect=_fake_stream):
+    with patch("app.api.routes.jd.agent1_draft", side_effect=_fake_stream):
         response = await client.post("/api/jd/draft", json=valid_requirements)
 
     assert response.status_code == 200
@@ -140,7 +140,7 @@ async def test_chat_streams_reply(client, db_session, sample_session_id):
     ]
     db_session.execute = AsyncMock(side_effect=results)
 
-    with patch("app.api.routes.jd.stream_chat_reply", side_effect=_fake_stream):
+    with patch("app.api.routes.jd.agent1_chat", side_effect=_fake_stream):
         response = await client.post(
             "/api/jd/chat",
             json={"session_id": str(sample_session_id), "message": "Make it more formal"},
@@ -235,7 +235,7 @@ async def test_reject_with_feedback_streams_revision(client, db_session, sample_
     ]
     db_session.execute = AsyncMock(side_effect=results)
 
-    with patch("app.api.routes.jd.stream_revision", side_effect=_fake_stream):
+    with patch("app.api.routes.jd.agent1_revise", side_effect=_fake_stream):
         response = await client.post(
             "/api/jd/approve",
             json={
@@ -311,6 +311,52 @@ async def test_get_session_returns_404_for_unknown(client, db_session):
     )
     response = await client.get(f"/api/jd/session/{uuid.uuid4()}")
     assert response.status_code == 404
+
+
+def test_parse_skills_from_draft_extracts_bullets():
+    from app.api.routes.jd import _parse_skills_from_draft
+    content = """
+## Required Skills
+- Python
+- AWS
+- Docker
+
+## Nice-to-Have Skills
+- Kubernetes
+- Terraform
+"""
+    required, nice = _parse_skills_from_draft(content)
+    assert required == ["Python", "AWS", "Docker"]
+    assert nice == ["Kubernetes", "Terraform"]
+
+
+def test_parse_skills_from_draft_returns_empty_when_sections_missing():
+    from app.api.routes.jd import _parse_skills_from_draft
+    required, nice = _parse_skills_from_draft("## The Role\nSome description.")
+    assert required == []
+    assert nice == []
+
+
+def test_parse_title_and_company_extracts_both():
+    from app.api.routes.jd import _parse_title_and_company
+    content = """# Senior Software Engineer
+
+## About the Company
+InvictusHiring is a leading AI recruitment platform.
+
+## The Role
+Some role description.
+"""
+    title, company = _parse_title_and_company(content)
+    assert title == "Senior Software Engineer"
+    assert company == "InvictusHiring is a leading AI recruitment platform."
+
+
+def test_parse_title_and_company_returns_empty_when_missing():
+    from app.api.routes.jd import _parse_title_and_company
+    title, company = _parse_title_and_company("## Required Skills\n- Python")
+    assert title == ""
+    assert company == ""
 
 
 @pytest.mark.asyncio

@@ -80,7 +80,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
-from typing import AsyncIterator, AsyncGenerator
+from typing import Any, AsyncIterator, AsyncGenerator
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -176,7 +176,7 @@ ADAPTATION RULES:
 async def supervisor_route(
     message: str,
     pipeline_state: str,
-    history: list[dict] | None = None,
+    history: list[dict[str, Any]] | None = None,
     has_draft: bool = False,
     job_title: str | None = None,
     job_department: str | None = None,
@@ -282,24 +282,9 @@ async def supervisor_route(
     return decision
 
 
-# Keep the old simple classify_intent for backward-compat with the /analytics/classify route
-async def supervisor_classify(message: str) -> str:
-    """
-    Simple single-intent classifier for the /analytics/classify endpoint.
-    For richer routing use supervisor_route() instead.
-    """
-    decision = await supervisor_route(message, pipeline_state="idle")
-    # Map the richer intents back to the three-value API contract
-    if decision.intent in ("jd_draft", "jd_chat", "jd_revise"):
-        return "jd_draft"
-    if decision.intent == "analytics":
-        return "analytics"
-    return "other"
-
-
 # ── Agent 1: JD Drafter ───────────────────────────────────────────────────────
 
-async def agent1_extract(free_text: str, session_id: str | None = None) -> dict:
+async def agent1_extract(free_text: str, session_id: str | None = None) -> dict[str, Any]:
     """
     Step 1a (freetext path only).
     Calls OpenAI function calling to pull structured fields out of plain English:
@@ -309,7 +294,7 @@ async def agent1_extract(free_text: str, session_id: str | None = None) -> dict:
     return await extract_requirements(free_text, session_id=session_id)
 
 
-def agent1_draft(requirements: dict, db: AsyncSession, session_id: str | None = None) -> AsyncIterator[str]:
+def agent1_draft(requirements: dict[str, Any], db: AsyncSession, session_id: str | None = None) -> AsyncIterator[str]:
     """
     Step 1b — first draft (both freetext and structured paths).
     Builds a pgvector RAG query from the requirements, retrieves similar past JDs,
@@ -323,7 +308,7 @@ def agent1_draft(requirements: dict, db: AsyncSession, session_id: str | None = 
 def agent1_chat(
     user_message: str,
     current_draft: str,
-    history: list[dict],
+    history: list[dict[str, Any]],
     session_id: str | None = None,
 ) -> AsyncIterator[str]:
     """
@@ -337,7 +322,7 @@ def agent1_chat(
 def agent1_revise(
     feedback: str,
     current_draft: str,
-    history: list[dict],
+    history: list[dict[str, Any]],
     session_id: str | None = None,
     draft_version: int = 2,
 ) -> AsyncIterator[str]:

@@ -23,8 +23,8 @@ Typical usage
 from __future__ import annotations
 
 import re
-from datetime import timezone
-from typing import TYPE_CHECKING
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,7 +62,7 @@ def _seniority_score(title: str | None) -> int:
     return 0
 
 
-def _skill_overlap(candidate_strengths: list | None, required_skills: list | None) -> float:
+def _skill_overlap(candidate_strengths: list[str] | None, required_skills: list[str] | None) -> float:
     """
     Fraction of required skills mentioned in the candidate's strength list.
     Returns 0.0 when either list is empty.
@@ -74,7 +74,7 @@ def _skill_overlap(candidate_strengths: list | None, required_skills: list | Non
     return hits / len(required_skills)
 
 
-def _gap_ratio(candidate_gaps: list | None, required_skills: list | None) -> float:
+def _gap_ratio(candidate_gaps: list[str] | None, required_skills: list[str] | None) -> float:
     """Fraction of required skills that appear in the gap list."""
     if not candidate_gaps or not required_skills:
         return 0.0
@@ -101,7 +101,7 @@ def _location_match(job_location: str | None, cover_letter: str | None) -> int:
     return 1 if city and city in cover_letter.lower() else 0
 
 
-def _days_between(early, late) -> int | None:
+def _days_between(early: datetime | None, late: datetime | None) -> int | None:
     """Return calendar days between two aware datetimes, or None if either is missing."""
     if early is None or late is None:
         return None
@@ -112,7 +112,7 @@ def _days_between(early, late) -> int | None:
 
 # ── Public feature builders ───────────────────────────────────────────────────
 
-def fit_features(app: CandidateApplication, job: JDRequest) -> dict:
+def fit_features(app: CandidateApplication, job: JDRequest) -> dict[str, Any]:
     """
     Feature dict for the candidate-to-role fit model.
 
@@ -150,7 +150,7 @@ def fit_features(app: CandidateApplication, job: JDRequest) -> dict:
     }
 
 
-def join_features(app: CandidateApplication, job: JDRequest) -> dict:
+def join_features(app: CandidateApplication, job: JDRequest) -> dict[str, Any]:
     """
     Feature dict for the join prediction (offer acceptance) model.
 

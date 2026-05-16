@@ -1,3 +1,6 @@
+from typing import Any
+
+from langsmith import traceable
 from loguru import logger
 from openai import AsyncOpenAI
 from sqlalchemy import text
@@ -17,7 +20,8 @@ async def embed(text_input: str) -> list[float]:
     return response.data[0].embedding
 
 
-async def retrieve_similar_jds(query: str, db: AsyncSession) -> list[dict]:
+@traceable(name="rag.retrieve_similar_jds", run_type="retriever", tags=["rag", "pgvector"])
+async def retrieve_similar_jds(query: str, db: AsyncSession) -> list[dict[str, Any]]:
     """Return top-k past JDs most similar to the query using pgvector cosine similarity."""
     logger.info(f"RAG retrieval | query='{query[:80]}…'")
     query_embedding = await embed(query)

@@ -1,6 +1,6 @@
 import re
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -22,6 +22,52 @@ from app.services.supervisor import (
 )
 
 router = APIRouter(prefix="/jd", tags=["JD Drafter"])
+
+
+def _parse_skills_from_draft(content: str) -> tuple[list[str], list[str]]:
+    """Extract required_skills and nice_to_have_skills from JD draft markdown bullet lists."""
+    def _bullets(section_text: str) -> list[str]:
+        skills = []
+        for line in section_text.splitlines():
+            line = line.strip()
+            if line and line[0] in "-*•·":
+                skill = line.lstrip("-*•· ").strip()
+                if skill:
+                    skills.append(skill)
+        return skills
+
+    required: list[str] = []
+    nice_to_have: list[str] = []
+
+    req_match = re.search(r"##\s*Required Skills.*?\n(.*?)(?=\n##|\Z)", content, re.DOTALL | re.IGNORECASE)
+    if req_match:
+        required = _bullets(req_match.group(1))
+
+    nth_match = re.search(r"##\s*Nice.to.Have.*?\n(.*?)(?=\n##|\Z)", content, re.DOTALL | re.IGNORECASE)
+    if nth_match:
+        nice_to_have = _bullets(nth_match.group(1))
+
+    return required, nice_to_have
+
+
+def _parse_title_and_company(content: str) -> tuple[str, str]:
+    """Extract job title (first # heading) and company description (About the Company section)."""
+    title = ""
+    company_description = ""
+
+    title_match = re.match(r"^#\s+(.+)", content.strip(), re.MULTILINE)
+    if title_match:
+        title = title_match.group(1).strip()
+
+    company_match = re.search(
+        r"##\s*About the Company.*?\n(.*?)(?=\n##|\Z)", content, re.DOTALL | re.IGNORECASE
+    )
+    if company_match:
+        paragraphs = [p.strip() for p in company_match.group(1).strip().splitlines() if p.strip()]
+        if paragraphs:
+            company_description = paragraphs[0]
+
+    return title, company_description
 
 
 def _parse_location_salary(content: str) -> tuple[str, str]:
@@ -113,7 +159,7 @@ async def _latest_draft(request_id: uuid.UUID, db: AsyncSession) -> JDDraft | No
     return result.scalar_one_or_none()
 
 
-async def _chat_history(request_id: uuid.UUID, session_id: str, db: AsyncSession) -> list[dict]:
+async def _chat_history(request_id: uuid.UUID, session_id: str, db: AsyncSession) -> list[dict[str, Any]]:
     """Read history from Redis; fall back to DB and warm the cache on a miss."""
     cached = await redis_history(session_id)
     if cached is not None:
@@ -286,6 +332,16 @@ async def chat(
                 req.location = new_location
             if new_salary:
                 req.salary_band = new_salary
+            new_required, new_nice = _parse_skills_from_draft(reply)
+            if new_required:
+                req.required_skills = new_required
+            if new_nice:
+                req.nice_to_have_skills = new_nice
+            new_title, new_company = _parse_title_and_company(reply)
+            if new_title:
+                req.title = new_title
+            if new_company:
+                req.company_description = new_company
             logger.info(f"Chat draft updated | session_id={body.session_id} version={next_version}")
 
         await db.commit()
@@ -347,6 +403,16 @@ async def approve_jd(
             req.location = new_location
         if new_salary:
             req.salary_band = new_salary
+        new_required, new_nice = _parse_skills_from_draft(revised)
+        if new_required:
+            req.required_skills = new_required
+        if new_nice:
+            req.nice_to_have_skills = new_nice
+        new_title, new_company = _parse_title_and_company(revised)
+        if new_title:
+            req.title = new_title
+        if new_company:
+            req.company_description = new_company
         await db.commit()
         await redis_push(sid, "user", feedback_msg)
         await redis_push(sid, "assistant", revised)

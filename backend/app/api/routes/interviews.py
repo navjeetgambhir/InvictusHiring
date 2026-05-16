@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, CurrentUser
-from app.db.models import CandidateApplication, InterviewInvitation, JDRequest
+from app.db.models import CandidateApplication, InterviewInvitation, InterviewFeedback, JDRequest
 from app.db.queries import get_request_or_404
 from app.services.interview_agent import generate_interview_invitation, generate_ics
 from app.services.email_sender import send_interview_email
@@ -31,6 +31,17 @@ class SchedulePayload(BaseModel):
     location: str = ""
     notes: str = ""
     duration_minutes: int = 60
+
+
+class FeedbackPayload(BaseModel):
+    round: int = 1
+    overall_rating: int                     # 1–5
+    technical_score: int | None = None
+    communication_score: int | None = None
+    cultural_fit_score: int | None = None
+    strengths: str | None = None
+    concerns: str | None = None
+    recommendation: str                     # strong_hire | hire | no_hire | strong_no_hire
 
 
 def _invitation_to_dict(inv: InterviewInvitation) -> dict:
@@ -275,3 +286,151 @@ async def download_ics(
         media_type="text/calendar",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post("/cancel/{application_id}")
+async def cancel_interview(
+    application_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: CurrentUser = Depends(get_current_user),
+):
+    """Cancel a scheduled interview — clears schedule, sets status to cancelled."""
+    result = await db.execute(
+        select(CandidateApplication).where(CandidateApplication.id == application_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if app.interview_status != "scheduled":
+        raise HTTPException(status_code=400, detail="Interview is not currently scheduled")
+
+    app.interview_status = "cancelled"
+    app.interview_scheduled_at = None
+    app.interview_format = None
+    app.interview_location = None
+    await db.commit()
+    logger.info(f"Interview cancelled | application={application_id}")
+    return {"application_id": str(application_id), "interview_status": "cancelled"}
+
+
+@router.post("/reschedule/{application_id}")
+async def reschedule_interview(
+    application_id: uuid.UUID,
+    payload: SchedulePayload,
+    db: AsyncSession = Depends(get_db),
+    _user: CurrentUser = Depends(get_current_user),
+):
+    """Reschedule a cancelled or scheduled interview with new date/time/format."""
+    if payload.format not in ("phone", "video", "in_person"):
+        raise HTTPException(status_code=400, detail="format must be phone, video, or in_person")
+
+    result = await db.execute(
+        select(CandidateApplication).where(CandidateApplication.id == application_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    app.interview_status = "scheduled"
+    app.interview_scheduled_at = payload.scheduled_at
+    app.interview_format = payload.format
+    app.interview_location = payload.location or None
+    app.interview_notes = payload.notes or None
+    await db.commit()
+    await db.refresh(app)
+    logger.info(f"Interview rescheduled | application={application_id} at={payload.scheduled_at.isoformat()}")
+    return {
+        "application_id": str(application_id),
+        "interview_status": app.interview_status,
+        "interview_scheduled_at": app.interview_scheduled_at.isoformat() if app.interview_scheduled_at else None,
+        "interview_format": app.interview_format,
+        "interview_location": app.interview_location,
+    }
+
+
+@router.post("/feedback/{application_id}")
+async def submit_feedback(
+    application_id: uuid.UUID,
+    payload: FeedbackPayload,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Submit post-interview feedback for a completed interview."""
+    VALID_RECOMMENDATIONS = {"strong_hire", "hire", "no_hire", "strong_no_hire"}
+    if payload.recommendation not in VALID_RECOMMENDATIONS:
+        raise HTTPException(status_code=400, detail=f"recommendation must be one of {VALID_RECOMMENDATIONS}")
+    if not (1 <= payload.overall_rating <= 5):
+        raise HTTPException(status_code=400, detail="overall_rating must be 1–5")
+
+    result = await db.execute(
+        select(CandidateApplication).where(CandidateApplication.id == application_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    fb = InterviewFeedback(
+        application_id=application_id,
+        submitted_by=user.name,
+        round=payload.round,
+        overall_rating=payload.overall_rating,
+        technical_score=payload.technical_score,
+        communication_score=payload.communication_score,
+        cultural_fit_score=payload.cultural_fit_score,
+        strengths=payload.strengths,
+        concerns=payload.concerns,
+        recommendation=payload.recommendation,
+    )
+    db.add(fb)
+
+    # Mark interview as completed when first feedback is submitted
+    if app.interview_status == "scheduled":
+        app.interview_status = "completed"
+
+    await db.commit()
+    await db.refresh(fb)
+    logger.info(f"Interview feedback submitted | application={application_id} rating={payload.overall_rating} rec={payload.recommendation}")
+    return {
+        "id": str(fb.id),
+        "application_id": str(fb.application_id),
+        "submitted_by": fb.submitted_by,
+        "round": fb.round,
+        "overall_rating": fb.overall_rating,
+        "technical_score": fb.technical_score,
+        "communication_score": fb.communication_score,
+        "cultural_fit_score": fb.cultural_fit_score,
+        "strengths": fb.strengths,
+        "concerns": fb.concerns,
+        "recommendation": fb.recommendation,
+        "created_at": fb.created_at.isoformat(),
+    }
+
+
+@router.get("/feedback/{application_id}")
+async def get_feedback(
+    application_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: CurrentUser = Depends(get_current_user),
+):
+    """Get all feedback entries for a candidate application."""
+    rows = (await db.execute(
+        select(InterviewFeedback)
+        .where(InterviewFeedback.application_id == application_id)
+        .order_by(InterviewFeedback.created_at)
+    )).scalars().all()
+    return [
+        {
+            "id": str(fb.id),
+            "submitted_by": fb.submitted_by,
+            "round": fb.round,
+            "overall_rating": fb.overall_rating,
+            "technical_score": fb.technical_score,
+            "communication_score": fb.communication_score,
+            "cultural_fit_score": fb.cultural_fit_score,
+            "strengths": fb.strengths,
+            "concerns": fb.concerns,
+            "recommendation": fb.recommendation,
+            "created_at": fb.created_at.isoformat(),
+        }
+        for fb in rows
+    ]

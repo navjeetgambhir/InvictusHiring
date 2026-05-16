@@ -22,114 +22,86 @@ ANALYTICS_PROMPT_VERSION = "analytics-v1"
 
 _client = wrap_openai(AsyncOpenAI(api_key=settings.openai_api_key))
 
-# ── DB schema fed to the SQL generator ────────────────────────────────────────
+# ── Live schema introspection ─────────────────────────────────────────────────
+#
+# Queried once per process lifetime from information_schema.columns.
+# Refreshes automatically on process restart (i.e. after migrations).
+# Tables excluded from the SQL prompt because they are not analytics targets:
+#   - agent_runs  (internal telemetry)
+#   - past_jds    (RAG vector store, not HR analytics data)
 
-_DB_SCHEMA = """
-PostgreSQL schema for the Invictus Hiring platform:
+_EXCLUDED_TABLES = frozenset({"agent_runs", "past_jds"})
 
-TABLE jd_requests (
-  id UUID PRIMARY KEY,
-  session_id UUID,
-  submitted_by VARCHAR,       -- user id
-  role VARCHAR,               -- 'hr' | 'hm'
-  title VARCHAR,              -- job title
-  department VARCHAR,
-  location VARCHAR,
-  salary_band VARCHAR,
-  required_skills JSON,       -- string array
-  nice_to_have_skills JSON,   -- string array
-  company_description TEXT,
-  status VARCHAR,             -- drafting | pending_approval | approved | rejected | published
-  published_at TIMESTAMPTZ,   -- when the job was published (NULL if not yet published)
-  expires_at TIMESTAMPTZ,     -- application deadline (NULL = no deadline)
-  max_applications INT,       -- application cap (NULL = unlimited)
-  created_at TIMESTAMPTZ
-)
-
-TABLE jd_drafts (
-  id UUID PRIMARY KEY,
-  request_id UUID REFERENCES jd_requests(id),
-  version INT,
-  content TEXT,
-  rejection_feedback TEXT,
-  created_at TIMESTAMPTZ
-)
-
-TABLE chat_messages (
-  id UUID PRIMARY KEY,
-  request_id UUID REFERENCES jd_requests(id),
-  role VARCHAR,   -- 'user' | 'assistant'
-  content TEXT,
-  created_at TIMESTAMPTZ
-)
-
-TABLE job_postings (
-  id UUID PRIMARY KEY,
-  request_id UUID REFERENCES jd_requests(id),
-  platform VARCHAR,    -- 'linkedin' | 'indeed' | 'google_jobs'
-  formatted_content TEXT,
-  post_url VARCHAR,
-  status VARCHAR,      -- 'posted' | 'failed'
-  posted_at TIMESTAMPTZ
-)
-
-TABLE candidate_applications (
-  id UUID PRIMARY KEY,
-  request_id UUID REFERENCES jd_requests(id),
-  name VARCHAR,
-  email VARCHAR,
-  phone VARCHAR,
-  cover_letter TEXT,
-  cv_filename VARCHAR,
-  screening_status VARCHAR,       -- 'pending' | 'screened' | 'failed'
-  screening_score INT,            -- 0–100
-  screening_summary TEXT,
-  screening_strengths JSONB,      -- string array
-  screening_gaps JSONB,           -- string array
-  screening_recommendation VARCHAR,  -- 'strong_match' | 'good_match' | 'partial_match' | 'poor_match'
-  applied_at TIMESTAMPTZ
-)
-
-TABLE users (
-  id UUID PRIMARY KEY,
-  name VARCHAR,
-  role VARCHAR,   -- 'hr' | 'hm'
-  created_at TIMESTAMPTZ
-)
-"""
-
-# ── Supervisor ─────────────────────────────────────────────────────────────────
-
-_SUPERVISOR_SYSTEM = (
-    "You are a routing classifier for an HR platform. "
-    "Classify the user message into exactly one category:\n"
-    "- jd_draft: requests to create, write, draft, or edit a job description\n"
-    "- analytics: questions about data, status, counts, applications, candidates, reports, history\n"
-    "- other: greetings, thanks, or anything unrelated to hiring\n\n"
-    "Reply with exactly one word: jd_draft, analytics, or other."
-)
+_schema_cache: str | None = None
 
 
-@traceable(name="analytics.classify_intent", run_type="chain", tags=["agent4", "analytics"])
-async def classify_intent(message: str) -> str:
-    response = await _client.chat.completions.create(
-        model=settings.openai_model,
-        messages=[
-            {"role": "system", "content": _SUPERVISOR_SYSTEM},
-            {"role": "user", "content": message},
-        ],
-        temperature=0,
-        max_tokens=5,
-    )
-    return (response.choices[0].message.content or "other").strip().lower()
+async def _fetch_live_schema(db: AsyncSession) -> str:
+    """
+    Introspect the live database and return a schema string for the SQL prompt.
+    Result is cached in _schema_cache for the lifetime of the process.
+    """
+    global _schema_cache
+    if _schema_cache is not None:
+        return _schema_cache
+
+    rows = await db.execute(text("""
+        SELECT
+            c.table_name,
+            c.column_name,
+            c.data_type,
+            c.is_nullable,
+            tc.constraint_type,
+            ccu.table_name  AS fk_table,
+            ccu.column_name AS fk_column
+        FROM information_schema.columns c
+        LEFT JOIN information_schema.key_column_usage kcu
+               ON kcu.table_schema = c.table_schema
+              AND kcu.table_name   = c.table_name
+              AND kcu.column_name  = c.column_name
+        LEFT JOIN information_schema.table_constraints tc
+               ON tc.constraint_name = kcu.constraint_name
+              AND tc.table_schema    = c.table_schema
+        LEFT JOIN information_schema.referential_constraints rc
+               ON rc.constraint_name = kcu.constraint_name
+        LEFT JOIN information_schema.key_column_usage ccu
+               ON ccu.constraint_name = rc.unique_constraint_name
+        WHERE c.table_schema = 'public'
+          AND c.table_name   NOT IN ({excluded_list})
+        ORDER BY c.table_name, c.ordinal_position
+    """.format(excluded_list=", ".join(f"'{t}'" for t in _EXCLUDED_TABLES))))
+
+    # Group columns by table
+    tables: dict[str, list[str]] = {}
+    for row in rows.fetchall():
+        table = row.table_name
+        col_type = row.data_type.upper()
+        nullable = "" if row.is_nullable == "YES" else " NOT NULL"
+        constraint = ""
+        if row.constraint_type == "PRIMARY KEY":
+            constraint = " PRIMARY KEY"
+        elif row.constraint_type == "FOREIGN KEY" and row.fk_table:
+            constraint = f" REFERENCES {row.fk_table}({row.fk_column})"
+        tables.setdefault(table, []).append(
+            f"  {row.column_name} {col_type}{nullable}{constraint}"
+        )
+
+    lines = ["PostgreSQL schema for the Invictus Hiring platform:\n"]
+    for table, columns in tables.items():
+        lines.append(f"TABLE {table} (")
+        lines.extend(columns)
+        lines.append(")\n")
+
+    _schema_cache = "\n".join(lines)
+    logger.info(f"Analytics: live schema loaded ({len(tables)} tables)")
+    return _schema_cache
 
 
 # ── NLP→SQL agent ──────────────────────────────────────────────────────────────
 
-_SQL_SYSTEM = f"""You are a PostgreSQL expert for an HR hiring platform.
+_SQL_SYSTEM_TEMPLATE = """You are a PostgreSQL expert for an HR hiring platform.
 Generate a safe, read-only SELECT query to answer the user's question.
 
-{_DB_SCHEMA}
+{schema}
 
 Rules:
 - Only generate SELECT statements. Never write INSERT, UPDATE, DELETE, DROP, or DDL.
@@ -225,15 +197,27 @@ async def stream_analytics_response(question: str, db: AsyncSession, session_id:
     input_tokens = output_tokens = None
 
     try:
+        schema = await _fetch_live_schema(db)
+        sql_system = _SQL_SYSTEM_TEMPLATE.format(schema=schema)
         session_context = await _resolve_session_context(session_id, db)
 
         # Step 1: generate SQL
+        # System message is kept static (schema + rules) so OpenAI's prompt
+        # caching can reuse the KV prefix across requests. Session context is
+        # injected as a separate user-role message so the cacheable prefix never
+        # changes between queries.
+        from openai.types.chat import ChatCompletionMessageParam
+        sql_messages: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": sql_system},
+        ]
+        if session_context:
+            sql_messages.append({"role": "user", "content": session_context})
+            sql_messages.append({"role": "assistant", "content": "Understood. I will use that session context when writing the SQL."})
+        sql_messages.append({"role": "user", "content": question})
+
         sql_resp = await _client.chat.completions.create(
             model=settings.openai_model,
-            messages=[
-                {"role": "system", "content": _SQL_SYSTEM + session_context},
-                {"role": "user", "content": question},
-            ],
+            messages=sql_messages,
             temperature=0,
         )
         raw_sql = (sql_resp.choices[0].message.content or "").strip()

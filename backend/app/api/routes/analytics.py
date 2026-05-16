@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -5,22 +7,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, CurrentUser
-from app.services.supervisor import supervisor_classify, supervisor_route, agent4_query
+from app.services.supervisor import supervisor_route, agent4_query
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
-
-
-class ClassifyRequest(BaseModel):
-    message: str
-    pipeline_state: str = "idle"
-    has_draft: bool = False
 
 
 class RouteRequest(BaseModel):
     message: str
     pipeline_state: str = "idle"
     has_draft: bool = False
-    history: list[dict] = []
+    history: list[dict[str, Any]] = []
     session_id: str | None = None
     job_title: str | None = None
     job_department: str | None = None
@@ -29,16 +25,6 @@ class RouteRequest(BaseModel):
 class QueryRequest(BaseModel):
     question: str
     session_id: str | None = None
-
-
-@router.post("/classify")
-async def classify(
-    body: ClassifyRequest,
-    _user: CurrentUser = Depends(get_current_user),
-):
-    """Simple 3-value intent: jd_draft | analytics | other."""
-    intent = await supervisor_classify(body.message)
-    return {"intent": intent}
 
 
 @router.post("/route")

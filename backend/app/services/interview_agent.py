@@ -14,6 +14,7 @@ import json
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -54,7 +55,7 @@ Return ONLY a JSON object with exactly these fields:
 async def generate_interview_invitation(
     app: CandidateApplication,
     db: AsyncSession,
-) -> dict:
+) -> dict[str, Any]:
     """
     AI generates a personalised interview invitation email + tailored questions.
     Saves InterviewInvitation to DB and returns the record as a dict.

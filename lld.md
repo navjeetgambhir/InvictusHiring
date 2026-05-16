@@ -2,7 +2,7 @@
 
 ## 1. System Overview
 
-Invictus Hiring is a multi-agent AI platform that automates the full hiring funnel: JD drafting → job board publishing → candidate screening → interview scheduling. All AI responses stream in real time. Human-in-the-loop approval gates sit at JD approval and interview email dispatch.
+Invictus Hiring is a multi-agent AI platform that automates the full hiring funnel: JD drafting → job board publishing → candidate screening → interview scheduling. All AI responses stream in real time. Human-in-the-loop approval gates sit at JD approval,Candidate Selection and Interview email dispatch.
 
 ---
 
@@ -10,7 +10,7 @@ Invictus Hiring is a multi-agent AI platform that automates the full hiring funn
 
 | Layer | Technology |
 |-------|-----------|
-| Backend API | FastAPI (Python 3.12), async/await throughout |
+| Backend API | FastAPI (Python 3.13), async/await throughout |
 | ORM | SQLAlchemy 2.0 (async), Mapped/mapped_column |
 | Database | PostgreSQL 16 + pgvector extension |
 | Cache | Redis (chat history, 24 h TTL) |
@@ -21,7 +21,7 @@ Invictus Hiring is a multi-agent AI platform that automates the full hiring funn
 | Auth | JWT HS256 + bcrypt passwords + Fernet email encryption |
 | Email | SMTP / Mailhog (local dev) |
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, shadcn/ui |
-| Container | Docker Compose (postgres, redis, mailhog) |
+| Container | Docker Compose (postgres, redis, mailhog); AWS ECS Fargate (production) |
 
 ---
 
@@ -36,8 +36,10 @@ JDRequest (1) ─────────────── (N) ChatMessage
 JDRequest (1) ─────────────── (N) JobPosting
 JDRequest (1) ─────────────── (N) CandidateApplication
 CandidateApplication (1) ──── (N) InterviewInvitation
+CandidateApplication (1) ──── (N) MlPrediction
 PastJD ─── (standalone, used for RAG only)
 AgentRun ─ (standalone audit log)
+MlPrediction ─ (ML prediction audit + training store)
 ```
 
 ### 3.2 Table Definitions
@@ -138,15 +140,36 @@ AgentRun ─ (standalone audit log)
 | Column | Type | Notes |
 |--------|------|-------|
 | id | UUID PK | |
-| title, department | VARCHAR | |
-| content | TEXT | historical JD for RAG |
-| embedding | vector(1536) | pgvector; cosine similarity search |
+| title | VARCHAR(255) | shown in attribution footer and retrieval logs |
+| department | VARCHAR(255) | shown in attribution footer |
+| content | TEXT | full JD text blob embedded and injected into LLM prompt (truncated to 1200 chars) |
+| embedding | vector(1536) | `text-embedding-3-small` output; 1536 dims fixed by the model |
+| created_at | TIMESTAMPTZ | |
+
+**Population:** seeded from `Data/jobs_results.json` via `Data/seed_past_jds.py`. Additionally, every time a JD is published via `POST /jobs/post/{session_id}`, `_save_to_past_jds()` is fired as a background task (`asyncio.create_task`) — embedding the approved draft and inserting it into this table so future drafts of similar roles retrieve it automatically.
+
+#### `ml_predictions`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| application_id | UUID FK → candidate_applications nullable | CASCADE delete; null for session-level queries |
+| session_id | UUID nullable | denormalised — survives JD request deletion |
+| candidate_name | VARCHAR(255) nullable | snapshot at prediction time |
+| job_title | VARCHAR(255) nullable | snapshot at prediction time |
+| prediction_type | VARCHAR(10) | `fit` \| `join` \| `both` |
+| fit_score | SMALLINT nullable | 0–100; null when `prediction_type = join` |
+| join_score | SMALLINT nullable | 0–100; null when `prediction_type = fit` |
+| fit_explanation | JSONB nullable | top-5 SHAP factors for fit model |
+| join_explanation | JSONB nullable | top-5 SHAP factors for join model |
+| created_at | TIMESTAMPTZ | |
+
+**Population:** written by `_save_predictions()` in `ml_agent.py` as a fire-and-forget `asyncio.create_task` after every `stream_ml_predictions()` call. One row per candidate per query. Enables prediction history, drift detection, and future retraining audits.
 
 #### `agent_runs`
 | Column | Type | Notes |
 |--------|------|-------|
 | id | UUID PK | |
-| agent_name | VARCHAR(50) | `jd_drafter \| cv_screener \| supervisor \| job_poster` |
+| agent_name | VARCHAR(50) | `jd_drafter \| cv_screener \| supervisor \| job_poster \| analytics \| interview_scheduler \| ml_predictor` |
 | operation | VARCHAR(50) | `initial_draft \| revision \| chat \| route \| screen \| post` |
 | prompt_version | VARCHAR(50) | |
 | model | VARCHAR(100) | |
@@ -243,14 +266,14 @@ Context injected per request: `pipeline_state`, `has_draft`, `session_id`, `job_
 
 **Flow:**
 1. `extract_requirements()` — GPT-4o-mini parses free-text → structured JSON fields (title, location, salary_band, skills, etc.)
-2. `retrieve_similar_jds()` — pgvector cosine similarity search against `past_jds` (top-K, threshold 0.75)
-3. `stream_initial_draft()` — GPT-4o streams full JD, seeded with retrieved examples
+2. `retrieve_similar_jds()` — pgvector cosine similarity search against `past_jds` (top-K=5, threshold 0.56). Query string is `title + department + required_skills`. Logs each retrieved JD with its cosine score.
+3. `stream_initial_draft()` — GPT-4o streams full JD, seeded with retrieved examples. If RAG hits exist, appends an attribution footer to the stream: `*Drafted with reference to archived JDs: [Title — Dept], ...*` rendered as a markdown horizontal rule + italic note.
 4. `stream_chat_reply()` — conversational refinement with full chat history. If the reply looks like a full JD (contains `##` headers, starts with `#` and >300 chars, or contains `**Job Title`/`**About the Company` bold-label sections), it is saved as a new `JDDraft` version and `jd_requests.location`/`salary_band` are re-parsed and updated via `_parse_location_salary()`.
 5. `stream_revision()` — structured revision on rejection feedback; always creates a new `JDDraft` version and updates structured fields.
 
 **Structured field sync:** `jd_requests.location` and `jd_requests.salary_band` are set at draft creation from `extract_requirements()` and re-synced on every subsequent draft save. `_parse_location_salary()` (in `routes/jd.py`) uses section-header regex to extract these from the markdown content.
 
-**RAG:** `app/services/rag.py` embeds the role title + skills using `text-embedding-3-small`, queries `past_jds` with `<=>` (cosine distance), logs retrieval scores.
+**RAG:** `app/services/rag.py` embeds the role title + skills using `text-embedding-3-small` (1536 dims), queries `past_jds` with `<=>` (pgvector cosine distance operator), filters by `RAG_SIMILARITY_THRESHOLD` (default 0.56), returns top `RAG_TOP_K` (default 5) results. Logs each retrieved title with similarity score. Each retrieved JD is truncated to 1200 chars before injection into the LLM prompt.
 
 ### 5.3 Agent 2 — Job Poster (`job_poster_agent.py`)
 
@@ -263,6 +286,8 @@ Reformats the approved JD for each platform, then dispatches:
 Streams NDJSON progress events: `start → chunk → posted | error → done`. All external platforms fail gracefully when credentials are absent.
 
 **DB commit pattern:** The `done` event handler inside the `StreamingResponse` generator uses a **fresh `AsyncSessionLocal()` session** (not the request-scoped `db`) for `req.status = "published"` and `JobPosting` inserts. The request-scoped session can be torn down before the generator finishes, causing a silent commit failure.
+
+**RAG feedback loop:** After the `done` commit, `asyncio.create_task(_save_to_past_jds(...))` fires in the background — embeds the published JD draft via `text-embedding-3-small` and inserts it into `past_jds`. Errors are caught and logged; the publish response is never affected.
 
 ### 5.4 Agent 3 — CV Screener (`cv_screener.py`)
 
@@ -278,12 +303,13 @@ Same `_extract_sync()` is used for uploaded cover letter files.
 ### 5.5 Agent 4 — Analytics (`analytics_agent.py`)
 
 **Flow:**
-1. `_resolve_session_context()` — if `session_id` provided, looks up `JDRequest` and injects `request_id`, `title` into SQL prompt
-2. GPT-4o-mini generates a PostgreSQL SELECT statement
-3. `validate_sql()` — AST validation via sqlglot (see §6)
-4. Execute against DB via SQLAlchemy `text()`
-5. GPT-4o streams a natural language answer from the result rows
-6. `_sanitise_output()` strips any UUID patterns from the narrated response before it reaches the frontend
+1. `_fetch_live_schema()` — introspects `information_schema.columns` to build a schema string for the SQL prompt. Excludes `agent_runs` and `past_jds` (not HR analytics targets). Result is **process-lifetime cached** in `_schema_cache` (refreshes on restart after migrations).
+2. `_resolve_session_context()` — if `session_id` provided, looks up `JDRequest` and injects `request_id`, `title` into SQL prompt as a separate `user`/`assistant` message pair so the cacheable system prompt prefix never changes between queries.
+3. GPT-4o-mini generates a PostgreSQL SELECT statement
+4. `validate_sql()` — AST validation via sqlglot (see §6)
+5. Execute against DB via SQLAlchemy `text()`
+6. GPT-4o streams a natural language answer from the result rows
+7. `_sanitise_output()` strips any UUID/email patterns from the narrated response before it reaches the frontend
 
 ### 5.6 Agent 5 — Interview Scheduler (`interview_agent.py`)
 
@@ -305,6 +331,10 @@ Same `_extract_sync()` is used for uploaded cover letter files.
 **Models** (saved as `{"pipeline": Pipeline, "features": [...]}`):
 - `fit_model.joblib` — hire probability, CV ROC-AUC 0.991
 - `join_model.joblib` — offer-acceptance probability, CV ROC-AUC 0.879
+
+**Persistence:** After the `results` NDJSON event is yielded, `asyncio.create_task(_save_predictions(results, prediction_type))` fires in the background. `_save_predictions()` opens a fresh `AsyncSessionLocal` session and inserts one `MlPrediction` row per candidate — capturing scores, SHAP explanations, and prediction type. Errors are caught and logged; the stream is never affected. Migration: `backend/migrations/009_ml_predictions.sql`.
+
+**SHAP:** `shap.TreeExplainer` runs on the GBT step of the pipeline. Input passes through `StandardScaler` before SHAP. Returns top 5 factors sorted by absolute contribution: `[{feature, label, contribution, direction, raw_value}]`. Human-readable labels defined in `_FIT_LABELS` / `_JOIN_LABELS`.
 
 ---
 
@@ -494,7 +524,48 @@ Written to `agent_runs` table. Never awaited inline — telemetry failure never 
 
 ---
 
-## 13. Key Design Decisions
+## 13. AWS Production Deployment
+
+### Architecture
+```
+Internet → ALB (port 80/443)
+              │
+              └─▶ ECS Fargate Task (awsvpc — shared localhost)
+                    ├── frontend (nginx:1.27, port 80)   ← ALB target
+                    │     nginx proxies /api/* → localhost:8000
+                    ├── backend (python:3.13, port 8000) ← not exposed through ALB
+                    └── mailpit (axllent/mailpit, ports 1025/8025) ← sidecar, essential=false
+```
+
+### Key Services
+| Service | AWS Resource | Notes |
+|---------|-------------|-------|
+| Container images | ECR (`invictus-backend`, `invictus-frontend`) | pushed by `infra/deploy.sh` |
+| Database | RDS PostgreSQL 16 (`db.t4g.micro`) | pgvector enabled; not publicly accessible |
+| Cache | ElastiCache Redis 7 (`cache.t4g.micro`) | |
+| Persistent storage | EFS | mounts for `cv_uploads/`, `indeed_feeds/`, `job_pages/` |
+| Secrets | Secrets Manager | `openai_api_key`, `database_url`, `redis_url`, `encryption_key`, `jwt_secret_key` |
+| Logs | CloudWatch Logs | 30-day retention; `/ecs/invictus-backend`, `/ecs/invictus-frontend` |
+| Load balancer | ALB (`invictus-alb`) | internet-facing; target group → frontend port 80 |
+
+### Networking
+- Backend port 8000 is **not** registered with the ALB target group — unreachable from the internet.
+- Nginx proxies `/api/*`, `/.well-known/*`, `/health`, `/indeed-feed/*`, `/jobs-feed/*` to `localhost:8000`. In ECS Fargate `awsvpc` mode, all containers in the same task share `localhost` — `backend` hostname does not resolve (unlike Docker Compose).
+- `TASK_SG` accepts port 80 and 8000 only from `ALB_SG`.
+- `RDS_SG` and `REDIS_SG` accept only from `TASK_SG` (tightened after ECS is running).
+
+### CORS Gap
+`main.py` hardcodes `allow_origins=["http://localhost:3000"]`. In production this does not matter because all browser requests go through nginx (server-side proxy, not subject to CORS). It would need to be parameterised via `CORS_ORIGIN` env var if the backend is ever accessed directly from a browser in production.
+
+### Deploy
+```bash
+./infra/deploy.sh eu-west-2 <ACCOUNT_ID>
+# builds + pushes both images → registers new task definition → triggers rolling ECS update
+```
+
+---
+
+## 14. Key Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
@@ -509,3 +580,8 @@ Written to `agent_runs` table. Never awaited inline — telemetry failure never 
 | Fresh session for publish commit | `POST /jobs/post/{session_id}` commits inside a `StreamingResponse` generator. FastAPI may close the request-scoped `db` session before the generator finishes. A fresh `AsyncSessionLocal()` inside the generator is not tied to the request lifecycle and commits reliably. |
 | Chat reply promoted to JDDraft | The `/jd/chat` endpoint saves the reply as a new `JDDraft` version when it looks like a full JD. This ensures the approval endpoint and job board always read the latest revised content, not just the original draft. Detection uses `##` headers, `# Title` starts, or `**Job Title`/`**About the Company` bold-label sections (the format GPT-4o uses). |
 | `max_applications` filter in SQL, not Python | Applying the cap in a Python `for` loop after `SELECT *` means `OFFSET`/`LIMIT` paginates the unfiltered set — the wrong records end up on each page. Moving the filter into the SQL `WHERE` clause makes pagination correct. |
+| Live schema introspection for analytics | Replaced the hardcoded `_DB_SCHEMA` string with `_fetch_live_schema()` which queries `information_schema.columns` at runtime. Schema is process-cached so it only runs once per restart. This means adding a column via migration is immediately visible to the analytics agent after the next deploy — no manual string update needed. |
+| Published JDs written back to `past_jds` | Closes the RAG feedback loop. Every published JD is embedded and stored so future drafts of similar roles benefit from the platform's own history, not just external scraped data. Fire-and-forget so it never delays the publish response. |
+| RAG similarity threshold 0.56 | `text-embedding-3-small` scores for the actual scraped JDs cluster between 0.45–0.72. Threshold of 0.56 filters out weak matches (< 0.55) while retrieving 1–3 strongly relevant results. Configurable via `RAG_SIMILARITY_THRESHOLD` in `.env`. |
+| RAG attribution footer streamed inline | The attribution is yielded as a final chunk from `stream_initial_draft()` after the LLM stream completes. It becomes part of `full_draft` saved to `jd_drafts.content`, so it persists on page refresh. Only shown when RAG hits exist. |
+| ML predictions persisted to `ml_predictions` | Every ML query result is written to the DB as a fire-and-forget background task. One row per candidate per query stores scores, SHAP factors, and prediction type. Enables prediction history, per-candidate drift tracking, and future retraining datasets without slowing the streaming response. `session_id` is denormalised so records survive JD request deletion. |

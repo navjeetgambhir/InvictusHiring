@@ -12,9 +12,10 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o"
 
     database_url: str  # postgresql+asyncpg://user:pass@host/db
+    redis_url: str = "redis://localhost:6379/0"
 
     rag_top_k: int = 5
-    rag_similarity_threshold: float = 0.75
+    rag_similarity_threshold: float = 0.56
 
     encryption_key: str  # Fernet key for encrypting PII (email)
     jwt_secret_key: str  # HS256 signing secret for access tokens
@@ -42,5 +43,18 @@ class Settings(BaseSettings):
     smtp_from: str = "noreply@invictushiring.co"
     smtp_use_tls: bool = True
 
+    # ── LangSmith tracing (optional) ─────────────────────────────────────────
+    langsmith_api_key: str = ""
+    langsmith_project: str = "InvictusHiring"
+    langsmith_tracing: str = "True"
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+
 
 settings = Settings()
+
+import os as _os  # noqa: E402
+if settings.langsmith_api_key:
+    _os.environ.setdefault("LANGSMITH_API_KEY", settings.langsmith_api_key)
+    _os.environ.setdefault("LANGSMITH_ENDPOINT", settings.langsmith_endpoint)
+    _os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
+    _os.environ.setdefault("LANGSMITH_TRACING", settings.langsmith_tracing)

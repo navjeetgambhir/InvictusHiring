@@ -1,8 +1,11 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from loguru import logger
 
 from app.core.database import engine, Base, get_db
@@ -11,6 +14,8 @@ from app.core.logging import setup_logging
 from app.core.security import encrypt_email, hash_email, hash_password
 from app.db.models import User
 from app.api.routes import jd, auth, jobs, agent_cards, candidates, analytics, interviews, ml, telemetry
+
+from app.core.limiter import limiter
 
 setup_logging()
 
@@ -57,6 +62,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,

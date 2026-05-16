@@ -79,7 +79,7 @@ class TestPredictFit:
              patch.object(pred_mod, "_models_loaded", True):
             result = predict_fit(_make_app(), _make_job())
         assert isinstance(result, float)
-        assert 0.0 <= result <= 1.0
+        assert 0.0 <= result <= 100.0
 
     def test_returns_none_when_model_not_loaded(self):
         import app.services.ml_predictor as pred_mod
@@ -121,7 +121,7 @@ class TestPredictFit:
              patch.object(pred_mod, "_models_loaded", True):
             result = predict_fit(_make_app(screening_score=10), _make_job())
 
-        assert result == 0.1
+        assert result == 10.0  # predict_proba returns 0.1 → * 100 = 10.0
         # Verify the feature vector length matches feature count
         assert len(captured["vec"][0]) == len(FIT_FEATURES)
 
@@ -136,7 +136,7 @@ class TestPredictJoin:
              patch.object(pred_mod, "_models_loaded", True):
             result = predict_join(_make_app(), _make_job())
         assert isinstance(result, float)
-        assert 0.0 <= result <= 1.0
+        assert 0.0 <= result <= 100.0
 
     def test_returns_none_when_model_not_loaded(self):
         import app.services.ml_predictor as pred_mod

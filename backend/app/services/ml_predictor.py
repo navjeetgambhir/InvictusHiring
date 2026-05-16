@@ -16,7 +16,7 @@ Usage in routes
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import joblib
 import numpy as np
@@ -94,13 +94,13 @@ def _load_models() -> None:
     _models_loaded = True
 
 
-def _feature_vector(features: dict, bundle: dict) -> list:
+def _feature_vector(features: dict[str, Any], bundle: dict[str, Any]) -> list[float]:
     """Extract values in the same column order the model was trained on."""
     return [features.get(col, 0) or 0 for col in bundle["features"]]
 
 
 def predict_fit(app: CandidateApplication, job: JDRequest) -> float | None:
-    """Return probability (0–1) that this candidate is a fit for the role, or None if model unavailable."""
+    """Return hire probability as a 0–100 score, or None if model unavailable."""
     _load_models()
     if _fit_model is None:
         return None
@@ -116,7 +116,7 @@ def predict_fit(app: CandidateApplication, job: JDRequest) -> float | None:
 
 
 def predict_join(app: CandidateApplication, job: JDRequest) -> float | None:
-    """Return probability (0–1) that this candidate will accept an offer, or None if model unavailable."""
+    """Return offer-acceptance probability as a 0–100 score, or None if model unavailable."""
     _load_models()
     if _join_model is None:
         return None
@@ -134,12 +134,12 @@ def predict_join(app: CandidateApplication, job: JDRequest) -> float | None:
 # ── SHAP explainability ────────────────────────────────────────────────────────
 
 def _shap_factors(
-    bundle: dict,
+    bundle: dict[str, Any],
     feature_names: list[str],
-    raw_vec: list,
+    raw_vec: list[float],
     labels: dict[str, str],
     top_n: int = 5,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """
     Compute SHAP values for a single prediction and return the top_n factors.
 
@@ -185,7 +185,7 @@ def _shap_factors(
         return []
 
 
-def explain_fit(app: CandidateApplication, job: JDRequest, top_n: int = 5) -> list[dict]:
+def explain_fit(app: CandidateApplication, job: JDRequest, top_n: int = 5) -> list[dict[str, Any]]:
     """Return top SHAP feature contributions for the fit prediction."""
     _load_models()
     if _fit_model is None:
@@ -200,7 +200,7 @@ def explain_fit(app: CandidateApplication, job: JDRequest, top_n: int = 5) -> li
         return []
 
 
-def explain_join(app: CandidateApplication, job: JDRequest, top_n: int = 5) -> list[dict]:
+def explain_join(app: CandidateApplication, job: JDRequest, top_n: int = 5) -> list[dict[str, Any]]:
     """Return top SHAP feature contributions for the join prediction."""
     _load_models()
     if _join_model is None:
