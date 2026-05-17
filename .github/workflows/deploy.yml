@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 env:
-  REGION: ${{ secrets.REGION }}
+  REGION: eu-west-2
   ECR_BACKEND: invictus-backend
   ECR_FRONTEND: invictus-frontend
   ECS_CLUSTER: invictus-cluster
@@ -54,7 +54,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.REGION }}
+          aws-region: ${{ env.REGION }}
 
       - name: Log in to ECR
         id: login-ecr
