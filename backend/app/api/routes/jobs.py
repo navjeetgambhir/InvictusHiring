@@ -1,4 +1,15 @@
+"""
+Job Poster routes — Agent 2 (publish approved JDs) and static file serving.
+
+Handles:
+  - POST /jobs/post/{session_id}   — reformat and publish to LinkedIn/Indeed/Google Jobs
+  - GET  /jobs/postings/{session_id} — list platform postings for a session
+  - GET  /jobs/indeed-feed/{id}.xml  — serve Indeed XML feed for crawler ingestion
+  - GET  /jobs/jobs/{id}             — serve Google Jobs HTML/JSON-LD page for crawler indexing
+"""
+
 import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,8 +89,6 @@ async def post_to_job_boards(
         f"Job poster triggered | session_id={session_id} title='{req.title}' "
         f"expires_at={options.expires_at} max_applications={options.max_applications}"
     )
-
-    import json
 
     postings: dict[str, dict[str, Any]] = {}
 

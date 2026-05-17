@@ -1,3 +1,16 @@
+"""
+FastAPI application entry point for the Invictus Hiring API.
+
+Startup sequence (managed by lifespan context manager):
+  1. Create any missing DB tables (SQLAlchemy Base.metadata.create_all)
+  2. Seed two demo users (hr@ and hm@) if they do not yet exist
+  3. Start the MCP stdio client (agents fall back to SQLAlchemy if it fails)
+
+Shutdown: MCP client closed → Redis connection closed.
+
+All routes are mounted under /api except agent-card routes which live at /.well-known.
+"""
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -16,6 +29,7 @@ from app.db.models import User
 from app.api.routes import jd, auth, jobs, agent_cards, candidates, analytics, interviews, ml, telemetry
 
 from app.core.limiter import limiter
+from app.core import mcp_client
 
 setup_logging()
 
@@ -51,7 +65,9 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database ready")
     await _seed_demo_users()
+    await mcp_client.start()
     yield
+    await mcp_client.stop()
     await close_redis()
     logger.info("Shutting down")
 

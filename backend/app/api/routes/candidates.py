@@ -1,3 +1,17 @@
+"""
+Candidates routes — public job board and HR application management.
+
+Public (no auth required):
+  - GET  /candidates/jobs              — paginated list of published, open jobs
+  - GET  /candidates/jobs/{session_id} — single published job detail
+  - POST /candidates/apply/{session_id} — submit a candidate application (rate-limited 5/hour)
+
+HR/HM only (JWT required):
+  - GET  /candidates/applications/{session_id}       — list applications with screening + ML scores
+  - GET  /candidates/applications/{session_id}/cv/{id} — download a candidate's CV
+  - POST /candidates/applications/{id}/outcome       — record hiring outcome for ML retraining
+"""
+
 import asyncio
 import uuid
 from datetime import datetime, timezone
@@ -120,7 +134,9 @@ async def list_published_jobs(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "total_pages": max(1, -(-total // page_size)),  # ceiling division
+        # -(-n // d) is the idiomatic ceiling-division trick in Python — avoids
+        # importing math.ceil and works correctly for all non-negative integers.
+        "total_pages": max(1, -(-total // page_size)),
     }
 
 

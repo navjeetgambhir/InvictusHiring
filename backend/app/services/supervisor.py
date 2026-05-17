@@ -84,6 +84,7 @@ from typing import Any, AsyncIterator, AsyncGenerator
 
 from loguru import logger
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
 from langsmith import traceable
 from langsmith.wrappers import wrap_openai
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -203,12 +204,13 @@ async def supervisor_route(
     if job_department:
         context_block += f"active_job_department: {job_department}\n"
     if history:
+        # Cap at last 6 turns — enough context for routing without blowing the
+        # gpt-4o-mini context window or inflating token costs for every message.
         recent = history[-6:]
         context_block += "recent_history:\n" + "\n".join(
             f"  [{m['role']}]: {m['content'][:120]}" for m in recent
         )
 
-    from openai.types.chat import ChatCompletionMessageParam
     messages: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": _ROUTE_SYSTEM},
         {"role": "user", "content": f"CONTEXT:\n{context_block}\n\nMESSAGE: {message}"},

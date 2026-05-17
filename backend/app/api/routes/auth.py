@@ -1,4 +1,13 @@
+"""
+Auth routes — login, password reset, JWT validation, and active-session persistence.
+
+All protected routes require a valid JWT issued by /auth/login.
+Active session state is stored in Redis (30-day TTL) rather than browser localStorage
+so it survives page refreshes and cross-device sessions.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException
+from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,15 +66,12 @@ async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Dep
     Accepts an email and returns 200 regardless of whether the account exists
     (prevents user enumeration). In production this would send a reset email.
     """
-    from app.core.security import hash_email
     digest = hash_email(request.email)
     result = await db.execute(select(User).where(User.email_hash == digest))
     user = result.scalar_one_or_none()
 
     if user:
-        from loguru import logger
-        from app.core.security import create_access_token
-        # Reuse JWT as a short-lived reset token (30 min expiry)
+        # Reuse JWT infrastructure as a short-lived reset token rather than a separate token store
         reset_token = create_access_token(
             email=request.email, name="", role="reset", expires_minutes=30
         )

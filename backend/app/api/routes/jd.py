@@ -1,3 +1,19 @@
+"""
+JD Drafter routes — full lifecycle for AI-generated job descriptions.
+
+Handles:
+  - POST /jd/draft-freetext  — start a draft from plain-English requirements
+  - POST /jd/draft           — start a draft from a structured form submission
+  - POST /jd/chat            — refine the current draft conversationally
+  - POST /jd/approve         — approve (→ 'approved') or reject + auto-revise (→ new draft)
+  - POST /jd/revert          — revert a published JD back to pending_approval for edits
+  - GET  /jd/sessions        — list recent JD sessions for the authenticated user
+  - GET  /jd/session/{id}    — full session state including latest draft and chat history
+
+All streaming endpoints return text/plain chunked responses; the frontend buffers
+chunks and strips the trailing __SESSION_ID__ sentinel before rendering.
+"""
+
 import re
 import uuid
 from typing import Any, Literal

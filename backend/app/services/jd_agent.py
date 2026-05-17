@@ -1,3 +1,18 @@
+"""
+JD Drafter Agent (Agent 1) — AI-powered job description drafting, revision, and chat.
+
+Three streaming entry points:
+  stream_initial_draft()  — RAG-augmented first draft from structured requirements
+  stream_revision()       — rewrite in response to rejection feedback
+  stream_chat_reply()     — conversational refinement of the current draft
+
+Off-topic messages are silently blocked before reaching OpenAI — is_on_topic()
+runs a single-token classifier to enforce the hiring-only scope rule.
+
+Prompt caching note: SYSTEM_PROMPT is intentionally static (no variable content)
+so OpenAI can cache the KV prefix across requests, reducing latency and cost.
+"""
+
 import asyncio
 import json
 import time
@@ -191,6 +206,9 @@ async def stream_initial_draft(requirements: dict[str, Any], db: AsyncSession, s
                 yield delta
 
         if past_jds:
+            # De-duplicate by (title, department) in case the same JD appears
+            # at different similarity scores, then append an attribution footnote
+            # so HR can trace which past JDs influenced the draft.
             seen = set()
             unique = [jd for jd in past_jds if (key := (jd['title'], jd['department'])) not in seen and not seen.add(key)]
             sources = ", ".join(f"[{jd['title']} — {jd['department']}]" for jd in unique)

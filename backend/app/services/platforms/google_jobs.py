@@ -25,11 +25,18 @@ Google setup (one-time):
      as a "Delegated owner"
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 from loguru import logger
 
 # Rendered job pages are stored here and served at /jobs/<session_id>
@@ -128,19 +135,12 @@ def save_job_page(session_id: str, html: str) -> Path:
 
 async def _notify_google_indexing(job_url: str, service_account_json: str) -> None:
     """Call the Google Indexing API using a service account JWT."""
-    import time
-    import httpx
-
     try:
         sa = json.loads(service_account_json)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid GOOGLE_SERVICE_ACCOUNT_JSON: {exc}") from exc
 
     # Build a self-signed JWT for the service account
-    import base64
-    import hashlib
-    import hmac
-
     header = base64.urlsafe_b64encode(
         json.dumps({"alg": "RS256", "typ": "JWT"}).encode()
     ).rstrip(b"=")
@@ -160,9 +160,6 @@ async def _notify_google_indexing(job_url: str, service_account_json: str) -> No
     signing_input = header + b"." + claims_b64
 
     # Sign with RSA-SHA256 using the service account private key
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding
-
     private_key = serialization.load_pem_private_key(
         sa["private_key"].encode(), password=None
     )

@@ -1,4 +1,15 @@
-"""CV text extraction and AI-powered candidate screening against job requirements."""
+"""
+CV Screener (Agent 3) — text extraction and AI-powered candidate screening.
+
+Given a saved CV file path and the corresponding job requirements this agent:
+  1. Reads the CV file from disk (PDF via pypdf, DOCX via python-docx, TXT as UTF-8)
+  2. Calls OpenAI to score the candidate 0–100 against the JD and extract strengths/gaps
+  3. Persists the screening results on CandidateApplication
+
+The screening system prompt explicitly tells the model to ignore any instructions
+embedded inside the CV text (prompt injection defence).
+"""
+
 import asyncio
 import io
 import json
@@ -7,14 +18,17 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import docx
 from loguru import logger
 from openai import AsyncOpenAI
 from langsmith import traceable
 from langsmith.wrappers import wrap_openai
+from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.prompt_guard import wrap_user_content
 from app.db.models import CandidateApplication, JDDraft, JDRequest
 from app.services.agent_telemetry import fire_run
 
@@ -48,17 +62,15 @@ Scoring guide:
 - 0–39:   poor_match    — significant skill or experience mismatch
 """
 
-from app.core.prompt_guard import wrap_user_content
 
+# ── File extraction ───────────────────────────────────────────────────────────
 
 def _pdf_to_text(data: bytes) -> str:
-    from pypdf import PdfReader
     reader = PdfReader(io.BytesIO(data))
     return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
 
 
 def _docx_to_text(data: bytes) -> str:
-    import docx
     doc = docx.Document(io.BytesIO(data))
     return "\n".join(p.text for p in doc.paragraphs if p.text.strip()).strip()
 

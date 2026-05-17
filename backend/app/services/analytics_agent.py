@@ -1,4 +1,20 @@
-"""Supervisor + NLP-to-SQL analytics agent for HR/HM queries."""
+"""
+Analytics Agent (Agent 4) — NLP-to-SQL query pipeline with AST safety validation.
+
+Given a plain-English HR question this agent:
+  1. Introspects the live database schema (once per process, cached)
+  2. Uses OpenAI to generate a safe read-only SELECT statement
+  3. Validates the SQL via an AST walk (sqlglot) before execution
+  4. Executes the query via the MCP client (falls back to SQLAlchemy)
+  5. Streams a natural language answer as NDJSON chunks
+
+Safety layers:
+  - AST validator blocks non-SELECT statements, dangerous functions, unknown tables
+  - Output sanitiser strips UUID and email patterns from the narrated answer
+  - SQL display sanitiser redacts UUIDs/emails from the badge shown in the UI
+    (the SQL that is actually executed is never modified)
+"""
+
 import asyncio
 import json
 import re
@@ -8,12 +24,14 @@ from typing import AsyncIterator
 
 from loguru import logger
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
 from langsmith import traceable
 from langsmith.wrappers import wrap_openai
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core import mcp_client
 from app.db.models import JDRequest
 from app.services.sql_ast_validator import validate_sql
 from app.services.agent_telemetry import fire_run
@@ -38,13 +56,14 @@ _schema_cache: str | None = None
 async def _fetch_live_schema(db: AsyncSession) -> str:
     """
     Introspect the live database and return a schema string for the SQL prompt.
+    Uses MCP db_query when available; falls back to direct SQLAlchemy.
     Result is cached in _schema_cache for the lifetime of the process.
     """
     global _schema_cache
     if _schema_cache is not None:
         return _schema_cache
 
-    rows = await db.execute(text("""
+    schema_sql = """
         SELECT
             c.table_name,
             c.column_name,
@@ -68,21 +87,29 @@ async def _fetch_live_schema(db: AsyncSession) -> str:
         WHERE c.table_schema = 'public'
           AND c.table_name   NOT IN ({excluded_list})
         ORDER BY c.table_name, c.ordinal_position
-    """.format(excluded_list=", ".join(f"'{t}'" for t in _EXCLUDED_TABLES))))
+    """.format(excluded_list=", ".join(f"'{t}'" for t in _EXCLUDED_TABLES))
+
+    client = mcp_client.get()
+    if client is not None:
+        raw_rows = await mcp_client.query(schema_sql)
+    else:
+        result = await db.execute(text(schema_sql))
+        raw_rows = [dict(zip(result.keys(), r)) for r in result.fetchall()]
 
     # Group columns by table
     tables: dict[str, list[str]] = {}
-    for row in rows.fetchall():
-        table = row.table_name
-        col_type = row.data_type.upper()
-        nullable = "" if row.is_nullable == "YES" else " NOT NULL"
+    for row in raw_rows:
+        r = row if isinstance(row, dict) else dict(row._mapping)
+        table = r["table_name"]
+        col_type = (r["data_type"] or "").upper()
+        nullable = "" if r["is_nullable"] == "YES" else " NOT NULL"
         constraint = ""
-        if row.constraint_type == "PRIMARY KEY":
+        if r["constraint_type"] == "PRIMARY KEY":
             constraint = " PRIMARY KEY"
-        elif row.constraint_type == "FOREIGN KEY" and row.fk_table:
-            constraint = f" REFERENCES {row.fk_table}({row.fk_column})"
+        elif r["constraint_type"] == "FOREIGN KEY" and r.get("fk_table"):
+            constraint = f" REFERENCES {r['fk_table']}({r['fk_column']})"
         tables.setdefault(table, []).append(
-            f"  {row.column_name} {col_type}{nullable}{constraint}"
+            f"  {r['column_name']} {col_type}{nullable}{constraint}"
         )
 
     lines = ["PostgreSQL schema for the Invictus Hiring platform:\n"]
@@ -162,23 +189,33 @@ def _sanitise_sql_for_display(sql: str) -> str:
 
 
 async def _resolve_session_context(session_id: str | None, db: AsyncSession) -> str:
-    """Return a context hint for the SQL prompt when a session is active."""
+    """Return a context hint for the SQL prompt when a session is active.
+    Uses MCP db_get_session when available; falls back to direct SQLAlchemy."""
     if not session_id:
         return ""
     try:
-        result = await db.execute(
-            select(JDRequest).where(JDRequest.session_id == uuid.UUID(session_id))
-        )
-        req = result.scalar_one_or_none()
-        if req:
+        client = mcp_client.get()
+        if client is not None:
+            data = await mcp_client.get_session_context(session_id)
+            req_id = data.get("id") or data.get("session_id")
+            title = data.get("title")
+        else:
+            result = await db.execute(
+                select(JDRequest).where(JDRequest.session_id == uuid.UUID(session_id))
+            )
+            req = result.scalar_one_or_none()
+            req_id = str(req.id) if req else None
+            title = req.title if req else None
+
+        if req_id and title:
             return (
                 f"\n\nACTIVE SESSION CONTEXT:\n"
                 f"The user is currently viewing the JD session with:\n"
                 f"  session_id = '{session_id}'\n"
-                f"  jd_requests.id = '{req.id}'\n"
-                f"  title = '{req.title}'\n"
+                f"  jd_requests.id = '{req_id}'\n"
+                f"  title = '{title}'\n"
                 f"When the user says 'this job', 'this role', or 'this position', "
-                f"filter by request_id = '{req.id}' (UUID literal, no quotes needed in SQL cast)."
+                f"filter by request_id = '{req_id}' (UUID literal, no quotes needed in SQL cast)."
             )
     except Exception as exc:
         logger.warning(f"Analytics: could not resolve session context | {exc}")
@@ -206,7 +243,6 @@ async def stream_analytics_response(question: str, db: AsyncSession, session_id:
         # caching can reuse the KV prefix across requests. Session context is
         # injected as a separate user-role message so the cacheable prefix never
         # changes between queries.
-        from openai.types.chat import ChatCompletionMessageParam
         sql_messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": sql_system},
         ]
@@ -242,14 +278,19 @@ async def stream_analytics_response(question: str, db: AsyncSession, session_id:
         sql_passed = True
         safe_sql = validation.normalized_sql or sql
 
-        # Step 3: execute
+        # Step 3: execute via MCP when available, fall back to SQLAlchemy
         try:
-            result = await db.execute(text(safe_sql))
-            columns = list(result.keys())
-            rows = result.fetchmany(50)
-            data = [dict(zip(columns, row)) for row in rows]
+            client = mcp_client.get()
+            if client is not None:
+                data = await mcp_client.query(safe_sql)
+                if data and "error" in data[0]:
+                    raise RuntimeError(data[0]["error"])
+            else:
+                result = await db.execute(text(safe_sql))
+                columns = list(result.keys())
+                data = [dict(zip(columns, row)) for row in result.fetchmany(50)]
             rows_returned = len(data)
-            logger.info(f"Analytics query returned {rows_returned} rows | sql={safe_sql[:120]}")
+            logger.info(f"Analytics query returned {rows_returned} rows via {'MCP' if client else 'SQLAlchemy'} | sql={safe_sql[:120]}")
         except Exception as exc:
             logger.error(f"Analytics SQL error: {exc} | sql={safe_sql}")
             status = "sql_error"

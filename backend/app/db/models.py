@@ -1,3 +1,20 @@
+"""
+SQLAlchemy ORM models for the Invictus Hiring platform.
+
+Model hierarchy:
+  User                 — HR / HM accounts (PII stored encrypted + blind-indexed)
+  JDRequest            — one per JD drafting session (owns drafts, messages, postings, applications)
+  JDDraft              — versioned draft text; each rejection produces a new version
+  ChatMessage          — full chat history for a session (user + assistant turns)
+  JobPosting           — one row per platform per published JD
+  PastJD               — published JDs embedded for RAG retrieval
+  CandidateApplication — a candidate's application with AI screening + ML scores
+  InterviewInvitation  — AI-generated invitation email + questions for a candidate
+  InterviewFeedback    — post-interview ratings submitted by HR/HM
+  AgentRun             — telemetry record for every OpenAI call
+  MlPrediction         — persisted fit/join scores + SHAP explanations per run
+"""
+
 import uuid
 from datetime import datetime, timezone
 from typing import Any

@@ -73,9 +73,10 @@ async def post_to_linkedin(
 
     response.raise_for_status()
 
-    # LinkedIn returns the new post's URN in the X-RestLi-Id header
+    # LinkedIn does not return the post URL in the body — it's in the X-RestLi-Id
+    # response header as a URN (urn:li:ugcPost:1234567890). We build the share URL
+    # from this URN; fall back to the generic jobs page if the header is missing.
     post_urn = response.headers.get("x-restli-id", "")
-    # URN looks like urn:li:ugcPost:1234567890 — build a share URL from it
     post_id = post_urn.split(":")[-1] if post_urn else ""
     url = (
         f"https://www.linkedin.com/feed/update/{post_urn}/"

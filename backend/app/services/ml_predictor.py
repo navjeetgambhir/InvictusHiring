@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import joblib
 import numpy as np
+import shap  # SHAP TreeExplainer for per-candidate feature contribution analysis
 from loguru import logger
 
 if TYPE_CHECKING:
@@ -149,10 +150,10 @@ def _shap_factors(
     Positive contribution = pushed the score UP; negative = pushed it DOWN.
     """
     try:
-        import shap  # lazy import — not required for core predictions
-
         pipeline = bundle["pipeline"]
-        # Transform input through all steps except the final estimator
+        # SHAP must see the transformed (scaled) features, not raw values, because
+        # TreeExplainer runs on the GBT step only — we pre-process through all
+        # earlier pipeline steps (StandardScaler) before passing to the explainer.
         X = np.array([raw_vec])
         if len(pipeline) > 1:
             X_transformed = pipeline[:-1].transform(X)
@@ -163,7 +164,8 @@ def _shap_factors(
         explainer = shap.TreeExplainer(clf)
         shap_values = explainer.shap_values(X_transformed)
 
-        # GBC returns a single array (log-odds contribution for positive class)
+        # GradientBoostingClassifier returns a single 2-D array; index [0] is the
+        # SHAP contributions for the first (and only) sample.
         values = np.array(shap_values[0] if isinstance(shap_values, list) else shap_values[0])
 
         factors = []

@@ -34,6 +34,7 @@ from sqlalchemy import select, text
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.db.models import ChatMessage, JDDraft, JDRequest, JobPosting
+from app.services.sql_ast_validator import validate_sql
 from app.services.platforms.google_jobs import post_to_google_jobs
 from app.services.platforms.indeed import post_to_indeed
 from app.services.platforms.linkedin import post_to_linkedin
@@ -161,6 +162,28 @@ async def db_search_similar_jds(
             }
             for r in rows.fetchall()
         ]
+
+
+@mcp.tool()
+async def db_query(sql: str) -> list[dict]:
+    """
+    Execute a read-only SQL SELECT against the hiring database.
+    The query is run through the AST validator before execution — non-SELECT
+    statements and dangerous functions are rejected.
+    Returns up to 50 rows as a list of dicts.
+    """
+    validation = validate_sql(sql)
+    if not validation.passed:
+        return [{"error": f"Query blocked: {validation.failure_reason}"}]
+    safe_sql = validation.normalized_sql or sql
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(text(safe_sql))
+            columns = list(result.keys())
+            rows = result.fetchmany(50)
+            return [dict(zip(columns, row)) for row in rows]
+        except Exception as exc:
+            return [{"error": str(exc)}]
 
 
 @mcp.tool()

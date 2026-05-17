@@ -1,3 +1,10 @@
+"""
+Analytics routes — context-aware message routing (supervisor) and NLP-to-SQL queries.
+
+POST /analytics/route   — supervisor classifies the user's message and returns an intent decision
+POST /analytics/query   — NLP→SQL analytics agent streams NDJSON results for HR data questions
+"""
+
 from typing import Any
 
 from fastapi import APIRouter, Depends

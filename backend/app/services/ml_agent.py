@@ -21,6 +21,7 @@ Example queries
   "Rank candidates by fit for session abc-123"
 """
 
+import asyncio
 import json
 import time
 import uuid
@@ -36,7 +37,6 @@ from app.core.database import AsyncSessionLocal
 from app.db.models import CandidateApplication, JDRequest, MlPrediction
 from app.services.ml_predictor import predict_fit, predict_join, explain_fit, explain_join
 from app.services.agent_telemetry import fire_run
-import asyncio
 
 _client = AsyncOpenAI(api_key=settings.openai_api_key)
 
@@ -210,7 +210,10 @@ async def stream_ml_predictions(
         )
 
         # ── 5. Emit structured results first (UI can render immediately) ───────
+        # Results are sent before the LLM summary so the frontend can render
+        # score cards and factor bars without waiting for the full narration.
         yield json.dumps({"type": "results", "data": results}) + "\n"
+        # Persist to DB as a background task — not awaited so streaming is not delayed.
         asyncio.create_task(_save_predictions(results, prediction_type))
 
         # ── 6. Generate and stream a natural language summary ─────────────────

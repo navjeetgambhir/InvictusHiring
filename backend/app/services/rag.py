@@ -1,3 +1,15 @@
+"""
+RAG (Retrieval-Augmented Generation) helpers for JD drafting.
+
+embed()              — calls text-embedding-3-small to produce a 1536-dim vector.
+retrieve_similar_jds() — cosine-similarity search over the past_jds table via pgvector.
+
+Retrieved JDs are injected as "reference" context in the initial JD draft prompt,
+giving the model concrete examples of tone and structure without copying verbatim.
+The @traceable decorator makes each retrieval call a child span in LangSmith under
+the parent jd_drafter.initial_draft chain.
+"""
+
 from typing import Any
 
 from langsmith import traceable
