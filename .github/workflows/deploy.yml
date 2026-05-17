@@ -15,6 +15,7 @@ jobs:
   test:
     name: Run tests
     runs-on: ubuntu-latest
+    environment: secrets
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +46,7 @@ jobs:
     name: Build & deploy
     runs-on: ubuntu-latest
     needs: test
+    environment: secrets
 
     steps:
       - uses: actions/checkout@v4
