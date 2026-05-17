@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 env:
-  REGION: ${{ AWS_ACCESS_KEY_ID.AWS_REGION }}
+  REGION: ${{ secrets.REGION }}
   ECR_BACKEND: invictus-backend
   ECR_FRONTEND: invictus-frontend
   ECS_CLUSTER: invictus-cluster
@@ -28,9 +28,6 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        # uv sync reads uv.lock for exact pinned versions.
-        # --group dev adds pytest, pytest-asyncio, pytest-mock, httpx.
-        # --no-install-project skips installing the package itself (not needed for tests).
         run: uv sync --group dev --no-install-project
 
       - name: Run tests
@@ -38,10 +35,9 @@ jobs:
           OPENAI_API_KEY: sk-fake-for-tests
           DATABASE_URL: postgresql+asyncpg://user:pass@localhost/db
           REDIS_URL: redis://localhost:6379/0
-          ENCRYPTION_KEY: ${{ env.ENCRYPTION_KEY }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           JWT_SECRET_KEY: test-secret
           PYTHONPATH: backend
-        # uv run uses the .venv created by uv sync
         run: uv run pytest -v --tb=short --ignore=backend/tests/integration
         working-directory: ${{ github.workspace }}
 
@@ -56,8 +52,8 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ AWS_ACCESS_KEY_ID.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ AWS_ACCESS_KEY_ID.AWS_SECRET_ACCESS_KEY }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.REGION }}
 
       - name: Log in to ECR
@@ -88,13 +84,13 @@ jobs:
 
       - name: Register new task definition
         env:
-          ACCOUNT_ID: ${{ AWS_ACCESS_KEY_ID.AWS_ACCOUNT_ID }}
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
         run: |
           TASK_ARN=$(sed \
             -e "s/ACCOUNT_ID/${ACCOUNT_ID}/g" \
             -e "s/REGION/${{ env.REGION }}/g" \
-            -e "s/YOUR_DOMAIN/${{ AWS_ACCESS_KEY_ID.APP_DOMAIN }}/g" \
-            -e "s/fs-XXXXXXXXX/${{ AWS_ACCESS_KEY_ID.EFS_ID }}/g" \
+            -e "s/YOUR_DOMAIN/${{ secrets.APP_DOMAIN }}/g" \
+            -e "s/fs-0bff0ffe1eba981b6/${{ secrets.EFS_ID }}/g" \
             infra/ecs-task-definition.json \
             | aws ecs register-task-definition \
                 --cli-input-json file:///dev/stdin \
