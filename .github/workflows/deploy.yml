@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 env:
-  REGION: ${{ AWS_ACCESS_KEY_ID.REGION }}
+  REGION: ${{ AWS_ACCESS_KEY_ID.AWS_REGION }}
   ECR_BACKEND: invictus-backend
   ECR_FRONTEND: invictus-frontend
   ECS_CLUSTER: invictus-cluster
@@ -38,7 +38,7 @@ jobs:
           OPENAI_API_KEY: sk-fake-for-tests
           DATABASE_URL: postgresql+asyncpg://user:pass@localhost/db
           REDIS_URL: redis://localhost:6379/0
-          ENCRYPTION_KEY: ${{ AWS_ACCESS_KEY_ID.ENCRYPTION_KEY }}
+          ENCRYPTION_KEY: ${{ env.ENCRYPTION_KEY }}
           JWT_SECRET_KEY: test-secret
           PYTHONPATH: backend
         # uv run uses the .venv created by uv sync
