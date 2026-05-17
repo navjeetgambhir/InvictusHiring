@@ -20,6 +20,11 @@ RUN uv pip install --system --no-cache \
 # Copy application code
 COPY backend/ /app/backend/
 
+# Copy trained ML models — baked into the image so the predictor has them at startup.
+# At 272 KB each this adds negligible image size. Re-run ml_train.py and rebuild
+# the image whenever models are retrained.
+COPY ml_models/ /app/ml_models/
+
 # Runtime directories (CV uploads, logs, feeds, pages)
 RUN mkdir -p /app/backend/cv_uploads /app/backend/logs \
              /app/backend/indeed_feeds /app/backend/job_pages
